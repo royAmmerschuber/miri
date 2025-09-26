@@ -519,7 +519,6 @@ fn main() {
                 Some(BorrowTrackerMethod::TreeBorrows(TreeBorrowsParams {
                     precise_interior_mut: true,
                 }));
-            miri_config.provenance_mode = ProvenanceMode::Strict;
         } else if arg == "-Zmiri-tree-borrows-no-precise-interior-mut" {
             match &mut miri_config.borrow_tracker {
                 Some(BorrowTrackerMethod::TreeBorrows(params)) => {
@@ -716,12 +715,7 @@ fn main() {
         }
     }
     // Tree Borrows implies strict provenance, and is not compatible with native calls.
-    if matches!(miri_config.borrow_tracker, Some(BorrowTrackerMethod::TreeBorrows { .. })) {
-        if miri_config.provenance_mode != ProvenanceMode::Strict {
-            fatal_error!(
-                "Tree Borrows does not support integer-to-pointer casts, and hence requires strict provenance"
-            );
-        }
+    if matches!(miri_config.borrow_tracker,Some(BorrowTrackerMethod::TreeBorrows{ .. })) {
         if !miri_config.native_lib.is_empty() {
             fatal_error!("Tree Borrows is not compatible with calling native functions");
         }
