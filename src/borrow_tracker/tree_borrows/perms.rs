@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::AccessKind;
 use crate::borrow_tracker::tree_borrows::diagnostics::TransitionError;
-use crate::borrow_tracker::tree_borrows::tree::AccessRelatedness;
+use crate::borrow_tracker::tree_borrows::tree::{AccessRelatedness, SimpleAccessRelatedness};
 
 /// The activation states of a pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -180,6 +180,10 @@ mod transition {
         })
     }
 
+    fn either_read(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
+        todo!()
+    }
+
     /// A child node was write-accessed: `Reserved` must become `Active` to obtain
     /// write permissions, `Frozen` and `Disabled` cannot obtain such permissions and produce UB.
     fn child_write(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
@@ -215,6 +219,10 @@ mod transition {
         })
     }
 
+    fn either_write(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
+        todo!()
+    }
+
     /// Dispatch handler depending on the kind of access and its position.
     pub(super) fn perform_access(
         kind: AccessKind,
@@ -222,11 +230,14 @@ mod transition {
         child: PermissionPriv,
         protected: bool,
     ) -> Option<PermissionPriv> {
-        match (kind, rel_pos.is_foreign()) {
-            (AccessKind::Write, true) => foreign_write(child, protected),
-            (AccessKind::Read, true) => foreign_read(child, protected),
-            (AccessKind::Write, false) => child_write(child, protected),
-            (AccessKind::Read, false) => child_read(child, protected),
+        use SimpleAccessRelatedness::*;
+        match (kind, rel_pos.simplify()) {
+            (AccessKind::Write, ForeignAccess) => foreign_write(child, protected),
+            (AccessKind::Read, ForeignAccess) => foreign_read(child, protected),
+            (AccessKind::Write, ChildAccess) => child_write(child, protected),
+            (AccessKind::Read, ChildAccess) => child_read(child, protected),
+            (AccessKind::Write, EitherAccess) => either_write(child, protected),
+            (AccessKind::Read, EitherAccess) => either_read(child, protected),
         }
     }
 }
@@ -371,6 +382,31 @@ impl Permission {
     /// See `foreign_access_skipping`
     pub fn strongest_idempotent_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
         self.inner.strongest_idempotent_foreign_access(prot)
+    }
+    pub fn strongest_allowed_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
+        // TODO this function isnt neccessary
+        //
+        // according to transition::foreign_read  and transition::foreign_write
+        // no foreign access of any kind leads to UB. according to the paper however foreign writes
+        // to protected pointers and foreign reads to Active/Unique references are UB
+        return IdempotentForeignAccess::Write;
+        // if prot {
+        //     match self.inner{
+        //         // foreign accesses only lead to UB if the reference is protected
+        //         ReservedFrz { .. } | ReservedIM | Frozen => IdempotentForeignAccess::Read,
+        //         //
+        //         _ => IdempotentForeignAccess::None
+        //     }
+        // }else{
+        //     return IdempotentForeignAccess::Write
+        // }
+    }
+    pub fn strongest_allowed_child_access(&self, prot: bool) -> IdempotentForeignAccess {
+        match self.inner {
+            Disabled => IdempotentForeignAccess::None,
+            Frozen | ReservedFrz { conflicted: true } => IdempotentForeignAccess::Read,
+            _ => IdempotentForeignAccess::Write,
+        }
     }
 }
 
@@ -640,7 +676,18 @@ mod propagation_optimization_checks {
     impl Exhaustive for AccessRelatedness {
         fn exhaustive() -> Box<dyn Iterator<Item = Self>> {
             use AccessRelatedness::*;
-            Box::new(vec![This, StrictChildAccess, AncestorAccess, CousinAccess].into_iter())
+            Box::new(
+                vec![
+                    This,
+                    StrictChildAccess,
+                    AncestorAccess,
+                    CousinAccess,
+                    WildcardChildAccess,
+                    WildcardForeignAccess,
+                    WildcardEitherAccess,
+                ]
+                .into_iter(),
+            )
         }
     }
 

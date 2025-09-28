@@ -14,6 +14,7 @@ mod foreign_access_skipping;
 mod perms;
 mod tree;
 mod unimap;
+mod wildcard;
 
 #[cfg(test)]
 mod exhaustive;
@@ -88,10 +89,6 @@ impl<'tcx> Tree {
         let global = machine.borrow_tracker.as_ref().unwrap();
         let span = machine.current_span();
         self.dealloc(tag, alloc_range(Size::ZERO, size), global, alloc_id, span)
-    }
-
-    pub fn expose_tag(&mut self, _tag: BorTag) {
-        // TODO
     }
 
     /// A tag just lost its protector.

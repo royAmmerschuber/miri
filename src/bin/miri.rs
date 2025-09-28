@@ -715,7 +715,7 @@ fn main() {
         }
     }
     // Tree Borrows implies strict provenance, and is not compatible with native calls.
-    if matches!(miri_config.borrow_tracker,Some(BorrowTrackerMethod::TreeBorrows{ .. })) {
+    if matches!(miri_config.borrow_tracker, Some(BorrowTrackerMethod::TreeBorrows { .. })) {
         if !miri_config.native_lib.is_empty() {
             fatal_error!("Tree Borrows is not compatible with calling native functions");
         }

@@ -30,8 +30,8 @@ pub fn main() {
     //    └────────────┘       └────────────┘       └───────────┘
 
     // disables ref1,ref2
-    *ref3=13;
+    *ref3 = 13;
 
     // both exposed pointers are disabled so this fails
-    let fail=unsafe{ *wild };
+    let fail = unsafe { *wild };
 }

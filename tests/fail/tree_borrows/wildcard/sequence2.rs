@@ -1,6 +1,6 @@
 //@compile-flags: -Zmiri-tree-borrows
 
-pub fn main(){
+pub fn main() {
     let mut x: u32 = 42;
 
     let ref1 = &mut x;
@@ -40,8 +40,8 @@ pub fn main(){
 
     // writes through ref1. we cannot write through ref3 as its frozen
     // disables ref2, ref3
-    unsafe{wild.write(42)};
+    unsafe { wild.write(42) };
 
     // ref2 is disabled
-    let fail=*ref2;
+    let fail = *ref2;
 }

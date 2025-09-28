@@ -30,8 +30,8 @@ pub fn main() {
     //    └────────────┘       └────────────┘       └───────────┘
 
     // disables ref3 as both exposed pointers are foreign to it
-    unsafe{ wild.write(13) };
+    unsafe { wild.write(13) };
 
     // fails because ref3 is disabled
-    let fail=*ref3;
+    let fail = *ref3;
 }

@@ -18,6 +18,7 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_span::Span;
 use smallvec::SmallVec;
 
+use super::wildcard::WildcardAccessTracking;
 use crate::borrow_tracker::tree_borrows::Permission;
 use crate::borrow_tracker::tree_borrows::diagnostics::{
     self, NodeDebugInfo, TbError, TransitionError,
@@ -247,7 +248,7 @@ pub struct Tree {
     /// `unwrap` any `perm.get(key)`.
     ///
     /// We do uphold the fact that `keys(perms)` is a subset of `keys(nodes)`
-    pub(super) rperms: DedupRangeMap<UniValMap<LocationState>>,
+    pub(super) rperms: DedupRangeMap<(UniValMap<LocationState>, UniValMap<WildcardAccessTracking>)>,
     /// The index of the root node.
     pub(super) root: UniIndex,
 }
@@ -609,7 +610,8 @@ impl Tree {
                     IdempotentForeignAccess::None,
                 ),
             );
-            DedupRangeMap::new(size, perms)
+            let wildcard_accesses = UniValMap::default();
+            DedupRangeMap::new(size, (perms, wildcard_accesses))
         };
         Self { root: root_idx, nodes, rperms, tag_mapping }
     }
@@ -1062,6 +1064,20 @@ impl Tree {
     }
 }
 
+/// methods for wildcard borrows
+impl<'tcx> Tree {
+    pub fn expose_tag(&mut self, tag: BorTag, protected: bool) {
+        let id = self.tag_mapping.get(&tag).unwrap();
+        let node = self.nodes.get(id).unwrap();
+        for (_, (perms, wildcard_accesses)) in self.rperms.iter_mut_all() {
+            let perm = *perms.entry(id).or_insert(node.default_location_state());
+
+            let access_type = perm.permission.strongest_allowed_child_access(protected);
+            WildcardAccessTracking::propagate_access(id, access_type, &self.nodes, wildcard_accesses);
+        }
+    }
+}
+
 impl Node {
     pub fn default_location_state(&self) -> LocationState {
         LocationState::new_non_accessed(
@@ -1094,12 +1110,31 @@ pub enum AccessRelatedness {
     /// The accessed pointer is neither of the above.
     // It's a cousin/uncle/etc., something in a side branch.
     CousinAccess,
+    WildcardChildAccess,
+    WildcardForeignAccess,
+    WildcardEitherAccess,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimpleAccessRelatedness {
+    ChildAccess,
+    ForeignAccess,
+    EitherAccess,
 }
 
 impl AccessRelatedness {
     /// Check that access is either Ancestor or Distant, i.e. not
     /// a transitive child (initial pointer included).
+    // TODO check if all uses dont depend on !is_foreign => is_child
     pub fn is_foreign(self) -> bool {
-        matches!(self, AccessRelatedness::AncestorAccess | AccessRelatedness::CousinAccess)
+        self.simplify() == SimpleAccessRelatedness::ForeignAccess
+    }
+    pub fn simplify(self) -> SimpleAccessRelatedness {
+        use AccessRelatedness::*;
+        match self {
+            This | StrictChildAccess | WildcardChildAccess => SimpleAccessRelatedness::ChildAccess,
+            AncestorAccess | CousinAccess | WildcardForeignAccess =>
+                SimpleAccessRelatedness::ForeignAccess,
+            WildcardEitherAccess => SimpleAccessRelatedness::EitherAccess,
+        }
     }
 }
