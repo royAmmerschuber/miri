@@ -4,6 +4,7 @@ use std::ops::Range;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_span::{Span, SpanData};
 
+use super::tree::SimpleAccessRelatedness;
 use crate::borrow_tracker::ProtectorKind;
 use crate::borrow_tracker::tree_borrows::perms::{PermTransition, Permission};
 use crate::borrow_tracker::tree_borrows::tree::LocationState;
@@ -55,7 +56,7 @@ pub struct Event {
     /// Kind of the access that triggered this event.
     pub access_cause: AccessCause,
     /// Relative position of the tag to the one used for the access.
-    pub is_foreign: bool,
+    pub relatedness: SimpleAccessRelatedness,
     /// User-visible range of the access.
     /// `None` means that this is an implicit access to the entire allocation
     /// (used for the implicit read on protector release).
@@ -251,6 +252,9 @@ pub(super) enum TransitionError {
     /// Cannot deallocate because some tag in the allocation is strongly protected.
     /// This kind of error can only occur on deallocations.
     ProtectedDealloc,
+    /// Cannot access this allocation with wildcard provenance, as there are no
+    /// Valid exposed references for this access kind.
+    NoValidExposedReferences(AccessKind)
 }
 
 impl History {
@@ -293,7 +297,7 @@ pub(super) struct TbError<'node> {
     pub access_cause: AccessCause,
     /// Which tag the access that caused this error was made through, i.e.
     /// which tag was used to read/write/deallocate.
-    pub accessed_info: &'node NodeDebugInfo,
+    pub accessed_info: Option<&'node NodeDebugInfo>,
 }
 
 impl TbError<'_> {

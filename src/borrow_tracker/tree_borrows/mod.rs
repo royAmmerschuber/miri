@@ -55,21 +55,25 @@ impl<'tcx> Tree {
             interpret::Pointer::new(alloc_id, range.start),
             range.size.bytes(),
         );
-        // TODO: for now we bail out on wildcard pointers. Eventually we should
-        // handle them as much as we can.
-        let tag = match prov {
-            ProvenanceExtra::Concrete(tag) => tag,
-            ProvenanceExtra::Wildcard => return interp_ok(()),
-        };
         let global = machine.borrow_tracker.as_ref().unwrap();
         let span = machine.current_span();
-        self.perform_access(
-            tag,
-            Some((range, access_kind, diagnostics::AccessCause::Explicit(access_kind))),
-            global,
-            alloc_id,
-            span,
-        )
+        match prov {
+            ProvenanceExtra::Concrete(tag) =>
+                self.perform_access(
+                    tag,
+                    Some((range, access_kind, diagnostics::AccessCause::Explicit(access_kind))),
+                    global,
+                    alloc_id,
+                    span,
+                ),
+            ProvenanceExtra::Wildcard =>
+                return self.perform_wildcard_access(
+                    Some((range, access_kind, diagnostics::AccessCause::Explicit(access_kind))),
+                    global,
+                    alloc_id,
+                    span,
+                ),
+        }
     }
 
     /// Check that this pointer has permission to deallocate this range.
@@ -621,7 +625,8 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 // uncovers a non-supported `extern static`.
                 let alloc_extra = this.get_alloc_extra(alloc_id)?;
                 trace!("Tree Borrows tag {tag:?} exposed in {alloc_id:?}");
-                alloc_extra.borrow_tracker_tb().borrow_mut().expose_tag(tag);
+                let global = this.machine.borrow_tracker.as_ref().unwrap();
+                alloc_extra.borrow_tracker_tb().borrow_mut().expose_tag(tag,global);
             }
             AllocKind::Function | AllocKind::VTable | AllocKind::TypeId | AllocKind::Dead => {
                 // No tree borrows on these allocations.

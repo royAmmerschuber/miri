@@ -1066,6 +1066,74 @@ impl Tree {
 
 /// methods for wildcard borrows
 impl<'tcx> Tree {
+    pub fn perform_wildcard_access(
+        &mut self,
+        access_range_and_kind: Option<(AllocRange, AccessKind, diagnostics::AccessCause)>,
+        global: &GlobalState,
+        alloc_id: AllocId, // diagnostics
+        span: Span,        // diagnostics
+    ) -> InterpResult<'tcx> {
+        if let Some((access_range, access_kind, access_cause)) = access_range_and_kind {
+            for (perms_range, (perms, wildcard_access)) in
+                self.rperms.iter_mut(access_range.start, access_range.size)
+            {
+                let mut stack = vec![self.root];
+                while let Some(id) = stack.pop() {
+                    let node = self.nodes.get_mut(id).unwrap();
+                    let mut entry = perms.entry(id);
+                    let perm = entry.or_insert(node.default_location_state());
+                    // TODO narrowing based on protector
+                    let protected = global.borrow().protected_tags.contains_key(&node.tag);
+                    let mut entry = wildcard_access.entry(id);
+                    let wildcard_access = entry.or_insert(Default::default());
+
+                    let Some(relatedness) = wildcard_access.access_relatedness(access_kind) else {
+                        return Err(TbError{
+                            conflicting_info:&node.debug_info,
+                            access_cause,
+                            alloc_id,
+                            error_offset:perms_range.start,
+                            error_kind:TransitionError::NoValidExposedReferences(access_kind),
+                            accessed_info:None
+                        }.build()).into();
+                    };
+                    let transition=perm.perform_access(access_kind, relatedness, protected)
+                                       .map_err(|trans|TbError{
+                                           conflicting_info:&node.debug_info,
+                                           access_cause,
+                                           alloc_id,
+                                           error_offset:perms_range.start,
+                                           error_kind:trans,
+                                           accessed_info:None
+                                       }.build())?;
+                    // Record the event as part of the history
+                    if !transition.is_noop() {
+                        node.debug_info.history.push(diagnostics::Event {
+                            transition,
+                            relatedness: relatedness.simplify(),
+                            access_cause,
+                            access_range: access_range_and_kind.map(|x| x.0),
+                            transition_range: perms_range.clone(),
+                            span,
+                        });
+                    }
+                    stack.extend(node.children.iter().copied());
+                }
+            }
+        } else {
+            // This is a special access through the entire allocation.
+            // It actually only affects `accessed` locations, so we need
+            // to filter on those before initiating the traversal.
+            //
+            // In addition this implicit access should not be visible to children,
+            // thus the use of `traverse_nonchildren`.
+            // See the test case `returned_mut_is_usable` from
+            // `tests/pass/tree_borrows/tree-borrows.rs` for an example of
+            // why this is important.
+            todo!()
+        };
+        interp_ok(())
+    }
     pub fn expose_tag(&mut self, tag: BorTag, protected: bool) {
         let id = self.tag_mapping.get(&tag).unwrap();
         let node = self.nodes.get(id).unwrap();

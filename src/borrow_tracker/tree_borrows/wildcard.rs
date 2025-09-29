@@ -3,6 +3,7 @@ use std::cmp::max;
 use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::tree::{AccessRelatedness, Node};
 use super::unimap::{UniIndex, UniValMap};
+use crate::AccessKind;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WildcardAccessTracking {
@@ -21,6 +22,12 @@ impl WildcardAccessTracking {
             Read
         } else {
             None
+        }
+    }
+    pub fn access_relatedness(&self, kind: AccessKind) -> Option<AccessRelatedness> {
+        match kind {
+            AccessKind::Read => self.read_access_relatedness(),
+            AccessKind::Write => self.write_access_relatedness(),
         }
     }
     pub fn read_access_relatedness(&self) -> Option<AccessRelatedness> {
@@ -65,13 +72,12 @@ impl WildcardAccessTracking {
         // wether we are upgrading or downgrading the allowed access rights
         let is_upgrade = old_access < access_type;
 
-
         src_access.is_exposed = access_type;
 
         // stack to process references for which the max_foreign_access field needs to be updated
         let mut stack: Vec<UniIndex> = Vec::new();
         //push own children onto update stack
-        if src_access.max_foreign_access < access_type{
+        if src_access.max_foreign_access < access_type {
             use IdempotentForeignAccess::*;
             let node = nodes.get(id).unwrap();
             // how many child accesses we have
