@@ -1,4 +1,4 @@
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::ops::Range;
 
 use rustc_data_structures::fx::FxHashMap;
@@ -37,8 +37,12 @@ impl fmt::Display for AccessCause {
 }
 
 impl AccessCause {
-    fn print_as_access(self, is_foreign: bool) -> String {
-        let rel = if is_foreign { "foreign" } else { "child" };
+    fn print_as_access(self, relatedness: SimpleAccessRelatedness) -> String {
+        let rel = match relatedness {
+            SimpleAccessRelatedness::ChildAccess => "child",
+            SimpleAccessRelatedness::ForeignAccess => "foreign",
+            SimpleAccessRelatedness::EitherAccess => "either",
+        };
         match self {
             Self::Explicit(kind) => format!("{rel} {kind}"),
             Self::Reborrow => format!("reborrow (acting as a {rel} read access)"),
@@ -121,7 +125,7 @@ impl HistoryData {
         self.events.push((Some(created.0.data()), msg_creation));
         for &Event {
             transition,
-            is_foreign,
+            relatedness,
             access_cause,
             access_range,
             span,
@@ -130,7 +134,7 @@ impl HistoryData {
         {
             // NOTE: `transition_range` is explicitly absent from the error message, it has no significance
             // to the user. The meaningful one is `access_range`.
-            let access = access_cause.print_as_access(is_foreign);
+            let access = access_cause.print_as_access(relatedness);
             let access_range_text = match access_range {
                 Some(r) => format!("at offsets {r:?}"),
                 None => format!("on every location previously accessed by this tag"),
@@ -254,7 +258,7 @@ pub(super) enum TransitionError {
     ProtectedDealloc,
     /// Cannot access this allocation with wildcard provenance, as there are no
     /// Valid exposed references for this access kind.
-    NoValidExposedReferences(AccessKind)
+    NoValidExposedReferences(AccessKind),
 }
 
 impl History {
@@ -306,10 +310,12 @@ impl TbError<'_> {
         use TransitionError::*;
         let cause = self.access_cause;
         let accessed = self.accessed_info;
+        let accessed_str =
+            self.accessed_info.map(|v| format!("{v}")).unwrap_or_else(|| "wildcard".into());
         let conflicting = self.conflicting_info;
-        let accessed_is_conflicting = accessed.tag == conflicting.tag;
+        let accessed_is_conflicting = accessed.map(|a| a.tag == conflicting.tag).unwrap_or(false);
         let title = format!(
-            "{cause} through {accessed} at {alloc_id:?}[{offset:#x}] is forbidden",
+            "{cause} through {accessed_str} at {alloc_id:?}[{offset:#x}] is forbidden",
             alloc_id = self.alloc_id,
             offset = self.error_offset
         );
@@ -320,10 +326,10 @@ impl TbError<'_> {
                 let mut details = Vec::new();
                 if !accessed_is_conflicting {
                     details.push(format!(
-                        "the accessed tag {accessed} is a child of the conflicting tag {conflicting}"
+                        "the accessed tag {accessed_str} is a child of the conflicting tag {conflicting}"
                     ));
                 }
-                let access = cause.print_as_access(/* is_foreign */ false);
+                let access = cause.print_as_access(SimpleAccessRelatedness::ChildAccess);
                 details.push(format!(
                     "the {conflicting_tag_name} tag {conflicting} has state {perm} which forbids this {access}"
                 ));
@@ -331,10 +337,10 @@ impl TbError<'_> {
             }
             ProtectedDisabled(before_disabled) => {
                 let conflicting_tag_name = "protected";
-                let access = cause.print_as_access(/* is_foreign */ true);
+                let access = cause.print_as_access(SimpleAccessRelatedness::ForeignAccess);
                 let details = vec![
                     format!(
-                        "the accessed tag {accessed} is foreign to the {conflicting_tag_name} tag {conflicting} (i.e., it is not a child)"
+                        "the accessed tag {accessed_str} is foreign to the {conflicting_tag_name} tag {conflicting} (i.e., it is not a child)"
                     ),
                     format!(
                         "this {access} would cause the {conflicting_tag_name} tag {conflicting} (currently {before_disabled}) to become Disabled"
@@ -347,16 +353,23 @@ impl TbError<'_> {
                 let conflicting_tag_name = "strongly protected";
                 let details = vec![
                     format!(
-                        "the allocation of the accessed tag {accessed} also contains the {conflicting_tag_name} tag {conflicting}"
+                        "the allocation of the accessed tag {accessed_str} also contains the {conflicting_tag_name} tag {conflicting}"
                     ),
                     format!("the {conflicting_tag_name} tag {conflicting} disallows deallocations"),
                 ];
                 (title, details, conflicting_tag_name)
             }
+            NoValidExposedReferences(access_type) => {
+                // TODO
+                let conflicting_tag_name = "TODO";
+                (title, vec!["TODO".into()], conflicting_tag_name)
+            }
         };
         let mut history = HistoryData::default();
-        if !accessed_is_conflicting {
-            history.extend(self.accessed_info.history.forget(), "accessed", false);
+        if let Some(accessed_info) = self.accessed_info
+            && !accessed_is_conflicting
+        {
+            history.extend(accessed_info.history.forget(), "accessed", false);
         }
         history.extend(
             self.conflicting_info.history.extract_relevant(self.error_offset, self.error_kind),
@@ -630,7 +643,7 @@ impl DisplayRepr {
                     .rperms
                     .iter_all()
                     .map(move |(_offset, perms)| {
-                        let perm = perms.get(idx);
+                        let perm = perms.0.get(idx);
                         perm.cloned()
                     })
                     .collect::<Vec<_>>();

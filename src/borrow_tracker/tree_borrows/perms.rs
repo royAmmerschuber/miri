@@ -181,7 +181,8 @@ mod transition {
     }
 
     fn either_read(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
-        todo!()
+        // TODO check if this is sound & if there is a more accurate response
+        Some(state)
     }
 
     /// A child node was write-accessed: `Reserved` must become `Active` to obtain
@@ -220,7 +221,8 @@ mod transition {
     }
 
     fn either_write(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
-        todo!()
+        // TODO check if this is sound & if there is a more accurate response
+        Some(state)
     }
 
     /// Dispatch handler depending on the kind of access and its position.
@@ -383,25 +385,7 @@ impl Permission {
     pub fn strongest_idempotent_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
         self.inner.strongest_idempotent_foreign_access(prot)
     }
-    pub fn strongest_allowed_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
-        // TODO this function isnt neccessary
-        //
-        // according to transition::foreign_read  and transition::foreign_write
-        // no foreign access of any kind leads to UB. according to the paper however foreign writes
-        // to protected pointers and foreign reads to Active/Unique references are UB
-        return IdempotentForeignAccess::Write;
-        // if prot {
-        //     match self.inner{
-        //         // foreign accesses only lead to UB if the reference is protected
-        //         ReservedFrz { .. } | ReservedIM | Frozen => IdempotentForeignAccess::Read,
-        //         //
-        //         _ => IdempotentForeignAccess::None
-        //     }
-        // }else{
-        //     return IdempotentForeignAccess::Write
-        // }
-    }
-    pub fn strongest_allowed_child_access(&self, prot: bool) -> IdempotentForeignAccess {
+    pub fn strongest_allowed_child_access(&self, _prot: bool) -> IdempotentForeignAccess {
         match self.inner {
             Disabled => IdempotentForeignAccess::None,
             Frozen | ReservedFrz { conflicted: true } => IdempotentForeignAccess::Read,
@@ -623,6 +607,7 @@ pub mod diagnostics {
                 // We don't care because protectors evolve independently from
                 // permissions.
                 TransitionError::ProtectedDealloc => false,
+                TransitionError::NoValidExposedReferences(access) => todo!(),
             }
         }
 

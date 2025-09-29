@@ -1,4 +1,4 @@
-//@compile-flags: -Zmiri-tree-borrows
+//@compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
 
 #[allow(unused_variables)]
 pub fn main() {
@@ -32,5 +32,5 @@ pub fn main() {
     // disabling ref2
     unsafe { wild.write(13) };
 
-    let fail = *ref2;
+    let fail = *ref2; //~ ERROR: /read access through .* is forbidden/
 }

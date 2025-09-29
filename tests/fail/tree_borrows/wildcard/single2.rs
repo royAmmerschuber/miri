@@ -11,9 +11,6 @@ pub fn main() {
     let int1 = ref1 as *mut u32 as usize;
     let wild = int1 as *mut u32;
 
-    // graph TD
-    // ptr_base --> ref1(Res)* --> ref2(Res)*
-    //
     //    ┌────────────┐
     //    │            │
     //    │  ptr_base  ├───────────┐
