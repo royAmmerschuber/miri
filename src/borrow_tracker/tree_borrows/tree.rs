@@ -1083,6 +1083,9 @@ impl<'tcx> Tree {
             for (perms_range, (perms, wildcard_access)) in
                 self.rperms.iter_mut(access_range.start, access_range.size)
             {
+                // we can simply iterate over the entire graph in arbitrary order
+                // as the relatedness of the access for each can be calculated with
+                // only the tracking information attached to each node
                 let mut stack = vec![self.root];
                 while let Some(id) = stack.pop() {
                     let node = self.nodes.get_mut(id).unwrap();
@@ -1094,6 +1097,9 @@ impl<'tcx> Tree {
                     let wildcard_access = entry.or_insert(Default::default());
 
                     let Some(relatedness) = wildcard_access.access_relatedness(access_kind) else {
+                        // there doenst exist a valid exposed reference for this access
+                        // to happen through
+                        // if this fails for one id, then it fails for all ids
                         return Err(TbError {
                             conflicting_info: &node.debug_info,
                             access_cause,
@@ -1108,6 +1114,7 @@ impl<'tcx> Tree {
                     let transition = perm
                         .perform_access(access_kind, relatedness, protected)
                         .map_err(|trans| {
+                            // if another pointer undergoes an invalid transformation
                             TbError {
                                 conflicting_info: &node.debug_info,
                                 access_cause,
@@ -1129,6 +1136,8 @@ impl<'tcx> Tree {
                             span,
                         });
                     }
+
+                    // iterate through children
                     stack.extend(node.children.iter().copied());
                 }
             }
