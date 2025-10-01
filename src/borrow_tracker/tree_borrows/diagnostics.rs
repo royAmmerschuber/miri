@@ -256,9 +256,6 @@ pub(super) enum TransitionError {
     /// Cannot deallocate because some tag in the allocation is strongly protected.
     /// This kind of error can only occur on deallocations.
     ProtectedDealloc,
-    /// Cannot access this allocation with wildcard provenance, as there are no
-    /// Valid exposed references for this access kind.
-    NoValidExposedReferences(AccessKind),
 }
 
 impl History {
@@ -359,11 +356,6 @@ impl TbError<'_> {
                 ];
                 (title, details, conflicting_tag_name)
             }
-            NoValidExposedReferences(access_type) => {
-                // TODO
-                let conflicting_tag_name = "TODO";
-                (title, vec!["TODO".into()], conflicting_tag_name)
-            }
         };
         let mut history = HistoryData::default();
         if let Some(accessed_info) = self.accessed_info
@@ -378,6 +370,21 @@ impl TbError<'_> {
         );
         err_machine_stop!(TerminationInfo::TreeBorrowsUb { title, details, history })
     }
+}
+/// Cannot access this allocation with wildcard provenance, as there are no
+/// Valid exposed references for this access kind.
+pub fn no_valid_exposed_references_error<'tcx>(
+    alloc_id: AllocId,
+    offset: u64,
+    access_cause: AccessCause,
+) -> InterpErrorKind<'tcx> {
+    let title =
+        format!("{access_cause} through wildcard at {alloc_id:?}[{offset:#x}] is forbidden");
+    let details = vec![format!(
+        "there are no exposed references who have {access_cause} permissions to this location"
+    )];
+    let history = HistoryData::default();
+    err_machine_stop!(TerminationInfo::TreeBorrowsUb { title, details, history })
 }
 
 type S = &'static str;

@@ -10,7 +10,7 @@ pub fn main() {
 
     // both references get exposed
     let int1 = ref1 as *mut u32 as usize;
-    let int2 = ref2 as *mut u32 as usize;
+    let int2 = ref2 as *const u32 as usize;
 
     let wild = int1 as *mut u32;
 
@@ -32,5 +32,5 @@ pub fn main() {
     unsafe { wild.write(13) };
 
     // fails because ref2 is disabled
-    let fail = *ref2;
+    let fail = *ref2; //~ ERROR: /read access through .* is forbidden/
 }

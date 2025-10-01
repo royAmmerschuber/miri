@@ -1,5 +1,6 @@
-//@compile-flags: -Zmiri-tree-borrows
+//@compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
 
+#[allow(unused_variables)]
 pub fn main() {
     let mut x: u32 = 42;
 
@@ -9,7 +10,7 @@ pub fn main() {
     let ref2 = &mut *ref1;
 
     let ref3 = &*ref2;
-    let int3 = ref3 as *mut u32 as usize;
+    let int3 = ref3 as *const u32 as usize;
 
     let wild = int1 as *mut u32;
 
@@ -43,5 +44,5 @@ pub fn main() {
     unsafe { wild.write(42) };
 
     // ref2 is disabled
-    let fail = *ref2;
+    let fail = *ref2; //~ ERROR: /read access through .* is forbidden/
 }

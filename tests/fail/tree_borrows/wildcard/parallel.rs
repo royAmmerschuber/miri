@@ -1,4 +1,4 @@
-//@compile-flags: -Zmiri-tree-borrows
+//@compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
 
 #[allow(unused_variables)]
 pub fn main() {
@@ -33,5 +33,5 @@ pub fn main() {
     *ref3 = 13;
 
     // both exposed pointers are disabled so this fails
-    let fail = unsafe { *wild };
+    let fail = unsafe { *wild }; //~ ERROR: /read access through .* is forbidden/
 }

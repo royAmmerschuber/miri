@@ -385,7 +385,7 @@ impl Permission {
     pub fn strongest_idempotent_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
         self.inner.strongest_idempotent_foreign_access(prot)
     }
-    pub fn strongest_allowed_child_access(&self, _prot: bool) -> IdempotentForeignAccess {
+    pub fn strongest_allowed_child_access(&self) -> IdempotentForeignAccess {
         match self.inner {
             Disabled => IdempotentForeignAccess::None,
             Frozen | ReservedFrz { conflicted: true } => IdempotentForeignAccess::Read,
@@ -607,7 +607,6 @@ pub mod diagnostics {
                 // We don't care because protectors evolve independently from
                 // permissions.
                 TransitionError::ProtectedDealloc => false,
-                TransitionError::NoValidExposedReferences(access) => todo!(),
             }
         }
 

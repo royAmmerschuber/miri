@@ -1,6 +1,6 @@
-//@compile-flags: -Zmiri-tree-borrows
+//@compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
 
-// this function has UB that is not detected by wildcard provenance.
+// NOTE: this function has UB that is not detected by wildcard provenance.
 // we would need proper exposed provenance handling to support it
 #[allow(unused_variables)]
 pub fn main() {

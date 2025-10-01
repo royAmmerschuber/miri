@@ -1,4 +1,4 @@
-//@compile-flags: -Zmiri-tree-borrows
+//@compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
 
 pub fn main() {
     wildcard_parallel();

@@ -1,4 +1,4 @@
-//@compile-flags: -Zmiri-tree-borrows
+//@compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
 
 #[allow(unused_variables)]
 pub fn main() {
@@ -28,5 +28,5 @@ pub fn main() {
     *ref2 = 13; //disables ref1
 
     // tries to do a wildcard access through the only exposed ref1, which is disabled
-    let fail = unsafe { *wild };
+    let fail = unsafe { *wild }; //~ ERROR: /read access through .* is forbidden/
 }

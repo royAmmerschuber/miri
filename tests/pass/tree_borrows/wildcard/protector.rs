@@ -1,5 +1,8 @@
 //@compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
 
+// NOTE: this function has UB that is not detected by wildcard provenance.
+// we could track additional data for wildcard pointers, to narrow the
+// potential access locations by which are protected
 #[allow(unused_variables)]
 pub fn main() {
     let mut x: u32 = 42;
@@ -10,7 +13,7 @@ pub fn main() {
 
     let int2 = ref2 as *mut u32 as usize;
 
-    let wild = int1 as *mut u32;
+    let wild = int2 as *mut u32;
     fn protect(ref3: &mut u32) {
         let int3 = ref3 as *mut u32 as usize;
         //    ┌────────────┐

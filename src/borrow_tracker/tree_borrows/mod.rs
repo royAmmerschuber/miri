@@ -625,8 +625,7 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 // uncovers a non-supported `extern static`.
                 let alloc_extra = this.get_alloc_extra(alloc_id)?;
                 trace!("Tree Borrows tag {tag:?} exposed in {alloc_id:?}");
-                let global = this.machine.borrow_tracker.as_ref().unwrap();
-                alloc_extra.borrow_tracker_tb().borrow_mut().expose_tag(tag, global);
+                alloc_extra.borrow_tracker_tb().borrow_mut().expose_tag(tag);
             }
             AllocKind::Function | AllocKind::VTable | AllocKind::TypeId | AllocKind::Dead => {
                 // No tree borrows on these allocations.
