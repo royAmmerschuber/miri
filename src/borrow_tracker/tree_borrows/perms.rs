@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::AccessKind;
 use crate::borrow_tracker::tree_borrows::diagnostics::TransitionError;
-use crate::borrow_tracker::tree_borrows::tree::{AccessRelatedness, SimpleAccessRelatedness};
+use crate::borrow_tracker::tree_borrows::tree::AccessRelatedness;
 
 /// The activation states of a pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -180,11 +180,6 @@ mod transition {
         })
     }
 
-    fn either_read(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
-        // TODO check if this is sound & if there is a more accurate response
-        Some(state)
-    }
-
     /// A child node was write-accessed: `Reserved` must become `Active` to obtain
     /// write permissions, `Frozen` and `Disabled` cannot obtain such permissions and produce UB.
     fn child_write(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
@@ -220,11 +215,6 @@ mod transition {
         })
     }
 
-    fn either_write(state: PermissionPriv, protected: bool) -> Option<PermissionPriv> {
-        // TODO check if this is sound & if there is a more accurate response
-        Some(state)
-    }
-
     /// Dispatch handler depending on the kind of access and its position.
     pub(super) fn perform_access(
         kind: AccessKind,
@@ -232,14 +222,11 @@ mod transition {
         child: PermissionPriv,
         protected: bool,
     ) -> Option<PermissionPriv> {
-        use SimpleAccessRelatedness::*;
-        match (kind, rel_pos.simplify()) {
-            (AccessKind::Write, ForeignAccess) => foreign_write(child, protected),
-            (AccessKind::Read, ForeignAccess) => foreign_read(child, protected),
-            (AccessKind::Write, ChildAccess) => child_write(child, protected),
-            (AccessKind::Read, ChildAccess) => child_read(child, protected),
-            (AccessKind::Write, EitherAccess) => either_write(child, protected),
-            (AccessKind::Read, EitherAccess) => either_read(child, protected),
+        match (kind, rel_pos.is_foreign()) {
+            (AccessKind::Write, true) => foreign_write(child, protected),
+            (AccessKind::Read, true) => foreign_read(child, protected),
+            (AccessKind::Write, false) => child_write(child, protected),
+            (AccessKind::Read, false) => child_read(child, protected),
         }
     }
 }
@@ -668,7 +655,6 @@ mod propagation_optimization_checks {
                     CousinAccess,
                     WildcardChildAccess,
                     WildcardForeignAccess,
-                    WildcardEitherAccess,
                 ]
                 .into_iter(),
             )

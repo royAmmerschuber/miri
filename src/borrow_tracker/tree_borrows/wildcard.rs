@@ -5,10 +5,23 @@ use super::perms::Permission;
 use super::tree::{AccessRelatedness, Node};
 use super::unimap::{UniIndex, UniValMap};
 use super::{LocationState, Tree};
-use crate::borrow_tracker::GlobalState;
-use crate::borrow_tracker::tree_borrows::wildcard;
 use crate::{AccessKind, BorTag};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WildcardAccessRelatedness {
+    ChildAccess,
+    ForeignAccess,
+    EitherAccess,
+}
+impl WildcardAccessRelatedness{
+    pub fn to_relatedness(self)->Option<AccessRelatedness>{
+        match self{
+            Self::ChildAccess => Some(AccessRelatedness::WildcardChildAccess),
+            Self::ForeignAccess => Some(AccessRelatedness::WildcardForeignAccess),
+            Self::EitherAccess => None,
+        }
+    }
+}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WildcardAccessTracking {
     /// if this tag is directly exposed and with what permissions its exposed
@@ -34,7 +47,7 @@ impl WildcardAccessTracking {
         &self,
         kind: AccessKind,
         exposed_as: IdempotentForeignAccess,
-    ) -> Option<AccessRelatedness> {
+    ) -> Option<WildcardAccessRelatedness> {
         match kind {
             AccessKind::Read => self.read_access_relatedness(exposed_as),
             AccessKind::Write => self.write_access_relatedness(exposed_as),
@@ -43,28 +56,28 @@ impl WildcardAccessTracking {
     pub fn read_access_relatedness(
         &self,
         exposed_as: IdempotentForeignAccess,
-    ) -> Option<AccessRelatedness> {
+    ) -> Option<WildcardAccessRelatedness> {
         let has_foreign = self.max_foreign_access >= IdempotentForeignAccess::Read;
         let has_child = self.child_reads > 0 || exposed_as >= IdempotentForeignAccess::Read;
-        use AccessRelatedness::*;
+        use WildcardAccessRelatedness as E;
         match (has_foreign, has_child) {
-            (true, true) => Some(WildcardEitherAccess),
-            (true, false) => Some(WildcardForeignAccess),
-            (false, true) => Some(WildcardChildAccess),
+            (true, true) => Some(E::EitherAccess),
+            (true, false) => Some(E::ForeignAccess),
+            (false, true) => Some(E::ChildAccess),
             (false, false) => None,
         }
     }
     pub fn write_access_relatedness(
         &self,
         exposed_as: IdempotentForeignAccess,
-    ) -> Option<AccessRelatedness> {
+    ) -> Option<WildcardAccessRelatedness> {
         let has_foreign = self.max_foreign_access == IdempotentForeignAccess::Write;
         let has_child = self.child_writes > 0 || exposed_as == IdempotentForeignAccess::Write;
-        use AccessRelatedness::*;
+        use WildcardAccessRelatedness as E;
         match (has_foreign, has_child) {
-            (true, true) => Some(WildcardEitherAccess),
-            (true, false) => Some(WildcardForeignAccess),
-            (false, true) => Some(WildcardChildAccess),
+            (true, true) => Some(E::EitherAccess),
+            (true, false) => Some(E::ForeignAccess),
+            (false, true) => Some(E::ChildAccess),
             (false, false) => None,
         }
     }

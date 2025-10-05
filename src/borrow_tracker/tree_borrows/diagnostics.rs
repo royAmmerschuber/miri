@@ -1,10 +1,9 @@
-use std::fmt::{self, Debug};
+use std::fmt;
 use std::ops::Range;
 
 use rustc_data_structures::fx::FxHashMap;
 use rustc_span::{Span, SpanData};
 
-use super::tree::SimpleAccessRelatedness;
 use crate::borrow_tracker::ProtectorKind;
 use crate::borrow_tracker::tree_borrows::perms::{PermTransition, Permission};
 use crate::borrow_tracker::tree_borrows::tree::LocationState;
@@ -37,12 +36,8 @@ impl fmt::Display for AccessCause {
 }
 
 impl AccessCause {
-    fn print_as_access(self, relatedness: SimpleAccessRelatedness) -> String {
-        let rel = match relatedness {
-            SimpleAccessRelatedness::ChildAccess => "child",
-            SimpleAccessRelatedness::ForeignAccess => "foreign",
-            SimpleAccessRelatedness::EitherAccess => "either",
-        };
+    fn print_as_access(self, is_foreign: bool) -> String {
+        let rel = if is_foreign { "foreign" } else { "child" };
         match self {
             Self::Explicit(kind) => format!("{rel} {kind}"),
             Self::Reborrow => format!("reborrow (acting as a {rel} read access)"),
@@ -60,7 +55,7 @@ pub struct Event {
     /// Kind of the access that triggered this event.
     pub access_cause: AccessCause,
     /// Relative position of the tag to the one used for the access.
-    pub relatedness: SimpleAccessRelatedness,
+    pub is_foreign: bool,
     /// User-visible range of the access.
     /// `None` means that this is an implicit access to the entire allocation
     /// (used for the implicit read on protector release).
@@ -125,7 +120,7 @@ impl HistoryData {
         self.events.push((Some(created.0.data()), msg_creation));
         for &Event {
             transition,
-            relatedness,
+            is_foreign,
             access_cause,
             access_range,
             span,
@@ -134,7 +129,7 @@ impl HistoryData {
         {
             // NOTE: `transition_range` is explicitly absent from the error message, it has no significance
             // to the user. The meaningful one is `access_range`.
-            let access = access_cause.print_as_access(relatedness);
+            let access = access_cause.print_as_access(is_foreign);
             let access_range_text = match access_range {
                 Some(r) => format!("at offsets {r:?}"),
                 None => format!("on every location previously accessed by this tag"),
@@ -326,7 +321,7 @@ impl TbError<'_> {
                         "the accessed tag {accessed_str} is a child of the conflicting tag {conflicting}"
                     ));
                 }
-                let access = cause.print_as_access(SimpleAccessRelatedness::ChildAccess);
+                let access = cause.print_as_access(/* is_foreign */ false);
                 details.push(format!(
                     "the {conflicting_tag_name} tag {conflicting} has state {perm} which forbids this {access}"
                 ));
@@ -334,7 +329,7 @@ impl TbError<'_> {
             }
             ProtectedDisabled(before_disabled) => {
                 let conflicting_tag_name = "protected";
-                let access = cause.print_as_access(SimpleAccessRelatedness::ForeignAccess);
+                let access = cause.print_as_access(/* is_foreign */ true);
                 let details = vec![
                     format!(
                         "the accessed tag {accessed_str} is foreign to the {conflicting_tag_name} tag {conflicting} (i.e., it is not a child)"

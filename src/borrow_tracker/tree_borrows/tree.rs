@@ -895,7 +895,7 @@ impl<'tcx> Tree {
             if !transition.is_noop() {
                 node.debug_info.history.push(diagnostics::Event {
                     transition,
-                    relatedness: rel_pos.simplify(),
+                    is_foreign: rel_pos.is_foreign(),
                     access_cause,
                     access_range: access_range_and_kind.map(|x| x.0),
                     transition_range: perms_range,
@@ -1184,8 +1184,9 @@ impl<'tcx> Tree {
 
                     // add children to stack
                     stack.extend(node.children.iter().copied());
+
                     let exposed_as = wildcard_access.exposed_as(node, Some(perm.permission));
-                    let Some(relatedness) =
+                    let Some(wildcard_relatedness) =
                         wildcard_access.access_relatedness(access_kind, exposed_as)
                     else {
                         // there doenst exist a valid exposed reference for this access
@@ -1197,6 +1198,10 @@ impl<'tcx> Tree {
                             access_cause,
                         ))
                         .into();
+                    };
+                    let Some(relatedness) = wildcard_relatedness.to_relatedness() else{
+                        //if the access type is either, then we do not apply any transition
+                        continue;
                     };
                     let old_permission = perm.permission;
                     let transition = perm
@@ -1217,7 +1222,7 @@ impl<'tcx> Tree {
                     if !transition.is_noop() {
                         node.debug_info.history.push(diagnostics::Event {
                             transition,
-                            relatedness: relatedness.simplify(),
+                            is_foreign: relatedness.is_foreign(),
                             access_cause,
                             access_range: access_range_and_kind.map(|x| x.0),
                             transition_range: perms_range.clone(),
@@ -1290,30 +1295,13 @@ pub enum AccessRelatedness {
     // It's a cousin/uncle/etc., something in a side branch.
     CousinAccess,
     WildcardChildAccess,
-    WildcardForeignAccess,
-    WildcardEitherAccess,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SimpleAccessRelatedness {
-    ChildAccess,
-    ForeignAccess,
-    EitherAccess,
+    WildcardForeignAccess
 }
 
 impl AccessRelatedness {
     /// Check that access is either Ancestor or Distant, i.e. not
     /// a transitive child (initial pointer included).
-    // TODO check if all uses dont depend on !is_foreign => is_child
     pub fn is_foreign(self) -> bool {
-        self.simplify() == SimpleAccessRelatedness::ForeignAccess
-    }
-    pub fn simplify(self) -> SimpleAccessRelatedness {
-        use AccessRelatedness::*;
-        match self {
-            This | StrictChildAccess | WildcardChildAccess => SimpleAccessRelatedness::ChildAccess,
-            AncestorAccess | CousinAccess | WildcardForeignAccess =>
-                SimpleAccessRelatedness::ForeignAccess,
-            WildcardEitherAccess => SimpleAccessRelatedness::EitherAccess,
-        }
+        matches!(self, AccessRelatedness::AncestorAccess | AccessRelatedness::CousinAccess | AccessRelatedness::WildcardForeignAccess)
     }
 }
