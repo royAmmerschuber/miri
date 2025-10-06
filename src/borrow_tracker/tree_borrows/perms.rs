@@ -53,6 +53,7 @@ enum PermissionPriv {
 }
 use self::PermissionPriv::*;
 use super::foreign_access_skipping::IdempotentForeignAccess;
+use super::wildcard::WildcardAccessLevel;
 
 impl PartialOrd for PermissionPriv {
     /// PermissionPriv is ordered by the reflexive transitive closure of
@@ -372,11 +373,11 @@ impl Permission {
     pub fn strongest_idempotent_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
         self.inner.strongest_idempotent_foreign_access(prot)
     }
-    pub fn strongest_allowed_child_access(&self) -> IdempotentForeignAccess {
+    pub fn strongest_allowed_child_access(&self) -> WildcardAccessLevel {
         match self.inner {
-            Disabled => IdempotentForeignAccess::None,
-            Frozen | ReservedFrz { conflicted: true } => IdempotentForeignAccess::Read,
-            _ => IdempotentForeignAccess::Write,
+            Disabled => WildcardAccessLevel::None,
+            Frozen | ReservedFrz { conflicted: true } => WildcardAccessLevel::Read,
+            _ => WildcardAccessLevel::Write,
         }
     }
 }

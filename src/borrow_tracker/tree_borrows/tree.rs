@@ -18,7 +18,7 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_span::Span;
 use smallvec::SmallVec;
 
-use super::wildcard::WildcardAccessTracking;
+use super::wildcard::{WildcardAccessLevel, WildcardAccessTracking};
 use crate::borrow_tracker::tree_borrows::Permission;
 use crate::borrow_tracker::tree_borrows::diagnostics::{
     self, HistoryData, NodeDebugInfo, TbError, TransitionError, no_valid_exposed_references_error,
@@ -708,8 +708,8 @@ impl<'tcx> Tree {
         // TODO: only initialize neccessary ranges
         for (_, (perms, wildcard_accesses)) in self.rperms.iter_mut_all() {
             if let Some(parent_access) = wildcard_accesses.get(parent_idx) {
-                let exposed_as = parent_access
-                    .exposed_as(parent_node, perms.get(parent_idx).map(|p| p.permission));
+                let exposed_as =
+                    parent_node.exposed_as(perms.get(parent_idx).map(|p| p.permission));
                 wildcard_accesses.insert(idx, parent_access.get_new_child(exposed_as));
             }
         }
@@ -1185,7 +1185,7 @@ impl<'tcx> Tree {
                     // add children to stack
                     stack.extend(node.children.iter().copied());
 
-                    let exposed_as = wildcard_access.exposed_as(node, Some(perm.permission));
+                    let exposed_as = node.exposed_as(Some(perm.permission));
                     let Some(wildcard_relatedness) =
                         wildcard_access.access_relatedness(access_kind, exposed_as)
                     else {
@@ -1199,7 +1199,7 @@ impl<'tcx> Tree {
                         ))
                         .into();
                     };
-                    let Some(relatedness) = wildcard_relatedness.to_relatedness() else{
+                    let Some(relatedness) = wildcard_relatedness.to_relatedness() else {
                         //if the access type is either, then we do not apply any transition
                         continue;
                     };
@@ -1269,6 +1269,14 @@ impl Node {
             self.default_initial_idempotent_foreign_access,
         )
     }
+    pub fn exposed_as(&self, perm: Option<Permission>) -> WildcardAccessLevel {
+        if self.is_exposed {
+            let perm = perm.unwrap_or_else(|| self.default_location_state().permission());
+            perm.strongest_allowed_child_access()
+        } else {
+            WildcardAccessLevel::None
+        }
+    }
 }
 
 impl VisitProvenance for Tree {
@@ -1295,13 +1303,18 @@ pub enum AccessRelatedness {
     // It's a cousin/uncle/etc., something in a side branch.
     CousinAccess,
     WildcardChildAccess,
-    WildcardForeignAccess
+    WildcardForeignAccess,
 }
 
 impl AccessRelatedness {
     /// Check that access is either Ancestor or Distant, i.e. not
     /// a transitive child (initial pointer included).
     pub fn is_foreign(self) -> bool {
-        matches!(self, AccessRelatedness::AncestorAccess | AccessRelatedness::CousinAccess | AccessRelatedness::WildcardForeignAccess)
+        matches!(
+            self,
+            AccessRelatedness::AncestorAccess
+                | AccessRelatedness::CousinAccess
+                | AccessRelatedness::WildcardForeignAccess
+        )
     }
 }

@@ -1,21 +1,29 @@
 use std::cmp::max;
 
-use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::perms::Permission;
 use super::tree::{AccessRelatedness, Node};
 use super::unimap::{UniIndex, UniValMap};
 use super::{LocationState, Tree};
 use crate::{AccessKind, BorTag};
-
+///
+/// Note that we derive Ord and PartialOrd, so the order in which variants are listed below matters:
+/// None < Read < Write. Do not change that order. See the `test_order` test.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub enum WildcardAccessLevel {
+    #[default]
+    None,
+    Read,
+    Write,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WildcardAccessRelatedness {
     ChildAccess,
     ForeignAccess,
     EitherAccess,
 }
-impl WildcardAccessRelatedness{
-    pub fn to_relatedness(self)->Option<AccessRelatedness>{
-        match self{
+impl WildcardAccessRelatedness {
+    pub fn to_relatedness(self) -> Option<AccessRelatedness> {
+        match self {
             Self::ChildAccess => Some(AccessRelatedness::WildcardChildAccess),
             Self::ForeignAccess => Some(AccessRelatedness::WildcardForeignAccess),
             Self::EitherAccess => None,
@@ -27,11 +35,11 @@ pub struct WildcardAccessTracking {
     /// if this tag is directly exposed and with what permissions its exposed
     child_writes: u16,
     child_reads: u16,
-    max_foreign_access: IdempotentForeignAccess,
+    max_foreign_access: WildcardAccessLevel,
 }
 impl WildcardAccessTracking {
-    pub fn max_child_access(&self, exposed_as: IdempotentForeignAccess) -> IdempotentForeignAccess {
-        use IdempotentForeignAccess::*;
+    pub fn max_child_access(&self, exposed_as: WildcardAccessLevel) -> WildcardAccessLevel {
+        use WildcardAccessLevel::*;
         max(
             exposed_as,
             if self.child_writes > 0 {
@@ -46,7 +54,7 @@ impl WildcardAccessTracking {
     pub fn access_relatedness(
         &self,
         kind: AccessKind,
-        exposed_as: IdempotentForeignAccess,
+        exposed_as: WildcardAccessLevel,
     ) -> Option<WildcardAccessRelatedness> {
         match kind {
             AccessKind::Read => self.read_access_relatedness(exposed_as),
@@ -55,10 +63,10 @@ impl WildcardAccessTracking {
     }
     pub fn read_access_relatedness(
         &self,
-        exposed_as: IdempotentForeignAccess,
+        exposed_as: WildcardAccessLevel,
     ) -> Option<WildcardAccessRelatedness> {
-        let has_foreign = self.max_foreign_access >= IdempotentForeignAccess::Read;
-        let has_child = self.child_reads > 0 || exposed_as >= IdempotentForeignAccess::Read;
+        let has_foreign = self.max_foreign_access >= WildcardAccessLevel::Read;
+        let has_child = self.child_reads > 0 || exposed_as >= WildcardAccessLevel::Read;
         use WildcardAccessRelatedness as E;
         match (has_foreign, has_child) {
             (true, true) => Some(E::EitherAccess),
@@ -69,10 +77,10 @@ impl WildcardAccessTracking {
     }
     pub fn write_access_relatedness(
         &self,
-        exposed_as: IdempotentForeignAccess,
+        exposed_as: WildcardAccessLevel,
     ) -> Option<WildcardAccessRelatedness> {
-        let has_foreign = self.max_foreign_access == IdempotentForeignAccess::Write;
-        let has_child = self.child_writes > 0 || exposed_as == IdempotentForeignAccess::Write;
+        let has_foreign = self.max_foreign_access == WildcardAccessLevel::Write;
+        let has_child = self.child_writes > 0 || exposed_as == WildcardAccessLevel::Write;
         use WildcardAccessRelatedness as E;
         match (has_foreign, has_child) {
             (true, true) => Some(E::EitherAccess),
@@ -81,15 +89,7 @@ impl WildcardAccessTracking {
             (false, false) => None,
         }
     }
-    pub fn exposed_as(&self, node: &Node, perm: Option<Permission>) -> IdempotentForeignAccess {
-        if node.is_exposed {
-            let perm = perm.unwrap_or_else(|| node.default_location_state().permission());
-            perm.strongest_allowed_child_access()
-        } else {
-            IdempotentForeignAccess::None
-        }
-    }
-    pub fn get_new_child(&self, exposed_as: IdempotentForeignAccess) -> Self {
+    pub fn get_new_child(&self, exposed_as: WildcardAccessLevel) -> Self {
         Self {
             max_foreign_access: max(self.max_foreign_access, self.max_child_access(exposed_as)),
             child_reads: 0,
@@ -100,8 +100,8 @@ impl WildcardAccessTracking {
     /// the `access_type` property is the maximum access type that can happen through this exposed reference
     pub fn update_exposure(
         id: UniIndex,
-        old_access_type: IdempotentForeignAccess,
-        access_type: IdempotentForeignAccess,
+        old_access_type: WildcardAccessLevel,
+        access_type: WildcardAccessLevel,
         nodes: &UniValMap<Node>,
         perms: &UniValMap<LocationState>,
         wildcard_accesses: &mut UniValMap<WildcardAccessTracking>,
@@ -109,7 +109,7 @@ impl WildcardAccessTracking {
         fn push_relevant_children(
             stack: &mut Vec<UniIndex>,
             is_upgrade: bool,
-            access_type: IdempotentForeignAccess,
+            access_type: WildcardAccessLevel,
             access_a: WildcardAccessTracking,
             access_b: WildcardAccessTracking,
             mut children: impl Iterator<Item = UniIndex>,
@@ -117,7 +117,7 @@ impl WildcardAccessTracking {
             perms: &UniValMap<LocationState>,
             wildcard_accesses: &mut UniValMap<WildcardAccessTracking>,
         ) {
-            use IdempotentForeignAccess::*;
+            use WildcardAccessLevel::*;
             // how many child accesses we have
             let child_accesses = if is_upgrade {
                 if access_type == Write {
@@ -153,7 +153,7 @@ impl WildcardAccessTracking {
                             let access = wildcard_accesses.get(*id).unwrap();
                             let node = nodes.get(*id).unwrap();
                             let exposed_as =
-                                access.exposed_as(node, perms.get(*id).map(|p| p.permission()));
+                                node.exposed_as(perms.get(*id).map(|p| p.permission()));
                             access.max_child_access(exposed_as) >= access_type
                         })
                         .unwrap(),
@@ -205,7 +205,7 @@ impl WildcardAccessTracking {
                 let access = entry.or_insert(Default::default());
 
                 let old_access = access.clone();
-                use IdempotentForeignAccess::*;
+                use WildcardAccessLevel::*;
                 // updating this nodes tracking data for children
                 if is_upgrade {
                     if access_type == Write {
@@ -222,7 +222,7 @@ impl WildcardAccessTracking {
                         access.child_reads -= 1;
                     }
                 }
-                let exposed_as = access.exposed_as(node, perms.get(id).map(|p| p.permission()));
+                let exposed_as = node.exposed_as(perms.get(id).map(|p| p.permission()));
                 let old_max_child_access = old_access.max_child_access(exposed_as);
                 let new_max_child_access = access.max_child_access(exposed_as);
                 // pushing children who need updating to the stack
@@ -259,7 +259,7 @@ impl WildcardAccessTracking {
             let access = entry.or_insert(Default::default());
             // all items on the stack need this updated
             access.max_foreign_access = access_type;
-            let exposed_as = access.exposed_as(node, perms.get(id).map(|p| p.permission()));
+            let exposed_as = node.exposed_as(perms.get(id).map(|p| p.permission()));
 
             // if this node is already exposed with stronger permissions, then our foreign access wont affect
             // this nodes children
@@ -300,7 +300,7 @@ impl Tree {
             let access_type = perm.permission().strongest_allowed_child_access();
             WildcardAccessTracking::update_exposure(
                 id,
-                IdempotentForeignAccess::None,
+                WildcardAccessLevel::None,
                 access_type,
                 &self.nodes,
                 perms,
