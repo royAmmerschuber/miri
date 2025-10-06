@@ -4,6 +4,7 @@ pub fn main() {
     wildcard_parallel();
     wildcard_sequence();
     destructor();
+    protector();
 }
 #[allow(unused_variables)]
 pub fn wildcard_parallel() {
@@ -101,4 +102,19 @@ fn destructor(){
     let int=ref1 as *mut u32 as usize;
     let wild=int as *mut u32;
     unsafe{ std::alloc::dealloc(wild as *mut u8,Layout::new::<u32>())};
+}
+
+fn protector(){
+    fn protect(arg:&mut u32){
+        *arg=4;
+    }
+    let mut x:u32=32;
+    let ref1=&mut x;
+    let int=ref1 as *mut u32 as usize;
+    let wild=int as *mut u32;
+    let wild_ref=unsafe{&mut *wild};
+
+    protect(wild_ref);
+
+    assert_eq!(*ref1,4);
 }
