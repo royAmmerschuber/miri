@@ -87,8 +87,8 @@ impl<'tcx> Tree {
         // TODO: for now we bail out on wildcard pointers. Eventually we should
         // handle them as much as we can.
         let tag = match prov {
-            ProvenanceExtra::Concrete(tag) => tag,
-            ProvenanceExtra::Wildcard => return interp_ok(()),
+            ProvenanceExtra::Concrete(tag) => Some(tag),
+            ProvenanceExtra::Wildcard => None,
         };
         let global = machine.borrow_tracker.as_ref().unwrap();
         let span = machine.current_span();

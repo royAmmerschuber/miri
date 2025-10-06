@@ -769,23 +769,38 @@ impl<'tcx> Tree {
     /// - the absence of Strong Protectors anywhere in the allocation
     pub fn dealloc(
         &mut self,
-        tag: BorTag,
+        tag: Option<BorTag>,
         access_range: AllocRange,
         global: &GlobalState,
         alloc_id: AllocId, // diagnostics
         span: Span,        // diagnostics
     ) -> InterpResult<'tcx> {
-        //TODO wildcard deallocation
-        self.perform_access(
-            tag,
-            Some((access_range, AccessKind::Write, diagnostics::AccessCause::Dealloc)),
-            global,
-            alloc_id,
-            span,
-        )?;
+        if let Some(tag) = tag {
+            self.perform_access(
+                tag,
+                Some((access_range, AccessKind::Write, diagnostics::AccessCause::Dealloc)),
+                global,
+                alloc_id,
+                span,
+            )?;
+        } else {
+            self.perform_wildcard_access(
+                Some((access_range, AccessKind::Write, diagnostics::AccessCause::Dealloc)),
+                global,
+                alloc_id,
+                span,
+            )?;
+        }
         for (perms_range, (perms, _wildcard_accesses)) in
             self.rperms.iter_mut(access_range.start, access_range.size)
         {
+            let tag = if let Some(tag) = tag {
+                tag
+            } else {
+                // the order in which we check if any nodes are invalidated doesnt matter,
+                // so we use the root as a default tag
+                self.nodes.get(self.root).unwrap().tag
+            };
             TreeVisitor {
                 nodes: &mut self.nodes,
                 tag_mapping: &self.tag_mapping,

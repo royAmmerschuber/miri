@@ -107,47 +107,45 @@ impl WildcardAccessTracking {
         wildcard_accesses: &mut UniValMap<WildcardAccessTracking>,
     ) {
         fn push_relevant_children(
-            stack: &mut Vec<UniIndex>,
-            is_upgrade: bool,
+            stack: &mut Vec<(UniIndex, WildcardAccessLevel)>,
+            other_factors: WildcardAccessLevel,
             access_type: WildcardAccessLevel,
-            access_a: WildcardAccessTracking,
-            access_b: WildcardAccessTracking,
+            old_access_type: WildcardAccessLevel,
+            access: WildcardAccessTracking,
             mut children: impl Iterator<Item = UniIndex>,
             nodes: &UniValMap<Node>,
             perms: &UniValMap<LocationState>,
             wildcard_accesses: &mut UniValMap<WildcardAccessTracking>,
         ) {
+            if max(access_type, old_access_type) < other_factors {
+                return;
+            }
+            let access_type = max(access_type, other_factors);
+            let old_access_type = max(old_access_type, other_factors);
+
             use WildcardAccessLevel::*;
-            // how many child accesses we have
-            let child_accesses = if is_upgrade {
-                if access_type == Write {
-                    //upgrading to writes effects writes
-                    access_a.child_writes
-                } else {
-                    //access_type==Read
-                    //upgrading from None effects reads and writes
-                    access_a.child_reads
-                }
+            let child_accesses = if max(access_type, old_access_type) == Write {
+                // None -> Write
+                // Read -> Write
+                // Write -> Read
+                // Write -> None
+                access.child_writes
             } else {
-                if access_type == Read {
-                    //downgrading from writes to reads only effects writes
-                    access_b.child_writes
-                } else {
-                    //access_type==None
-                    //downgrading to None effects reads and writes
-                    access_b.child_reads
-                }
+                // None -> Read
+                // Read  -> None
+                access.child_reads
             };
+            // how many child accesses we have
             if child_accesses == 0 {
                 // no children have child_accesses at this access level, so the parent node
                 // has complete influence over the childrens foreign accesses
                 // this means every child needs to be updated on a change
-                stack.extend(children);
+                stack.extend(children.map(|id| (id, access_type)));
             } else if child_accesses == 1 {
                 // there is exactly one child at this access level, so for most children our access change
                 // doesnt effect them. except for the child with access rights at at least this level, whose
                 // foreign_access is defined by its parent
-                stack.push(
+                stack.push((
                     children
                         .find(|id| {
                             let access = wildcard_accesses.get(*id).unwrap();
@@ -157,7 +155,8 @@ impl WildcardAccessTracking {
                             access.max_child_access(exposed_as) >= access_type
                         })
                         .unwrap(),
-                );
+                    access_type,
+                ));
             } else {
                 // there are multiple children with this access level. they are already foreign to each other so
                 // the parents access level doesnt effect them. we dont need to update any other children
@@ -175,15 +174,16 @@ impl WildcardAccessTracking {
         let is_upgrade = old_access_type < access_type;
 
         // stack to process references for which the max_foreign_access field needs to be updated
-        let mut stack: Vec<UniIndex> = Vec::new();
-        //push own children onto update stack
-        if src_access.max_foreign_access < max(access_type, old_access_type) {
+        let mut stack: Vec<(UniIndex, WildcardAccessLevel)> = Vec::new();
+
+        // push own children onto update stack
+        {
             let node = nodes.get(id).unwrap();
             push_relevant_children(
                 &mut stack,
-                is_upgrade,
+                /* other factors */ src_access.max_foreign_access,
                 access_type,
-                src_access.clone(),
+                old_access_type,
                 src_access.clone(),
                 node.children.iter().copied(),
                 nodes,
@@ -191,7 +191,6 @@ impl WildcardAccessTracking {
                 wildcard_accesses,
             );
         }
-
         // we need to propagate the tracking info up the tree, for this we traverse up the parents
         // we can skip propagating info to parents & their other children, if their access permissions
         // dont change (for parents child_permissions and for the other children foreign permissions)
@@ -209,16 +208,24 @@ impl WildcardAccessTracking {
                 // updating this nodes tracking data for children
                 if is_upgrade {
                     if access_type == Write {
+                        // None -> Write
+                        // Read -> Write
                         access.child_writes += 1;
                     }
                     if prev_old_access == None {
+                        // None -> Read
+                        // None -> Write
                         access.child_reads += 1;
                     }
                 } else {
                     if prev_old_access == Write {
+                        // Write -> None
+                        // Write -> Read
                         access.child_writes -= 1;
                     }
                     if access_type == None {
+                        // Read  -> None
+                        // Write -> None
                         access.child_reads -= 1;
                     }
                 }
@@ -229,15 +236,14 @@ impl WildcardAccessTracking {
                 //
                 // if this node already has foreign accesses or is itself exposed with stronger access,
                 // then we dont need to update its children as they are already exposed to stronger foreign accesses
-                if max(exposed_as, old_access.max_foreign_access)
-                    < max(access_type, old_access_type)
                 {
+                    let access = if is_upgrade { old_access.clone() } else { access.clone() };
                     push_relevant_children(
                         &mut stack,
-                        is_upgrade,
+                        /* other factors */ max(exposed_as, old_access.max_foreign_access),
                         access_type,
-                        old_access.clone(),
-                        access.clone(),
+                        old_access_type,
+                        access,
                         node.children.iter().copied().filter(|id| prev != *id),
                         nodes,
                         perms,
@@ -253,7 +259,7 @@ impl WildcardAccessTracking {
             }
         }
 
-        while let Some(id) = stack.pop() {
+        while let Some((id, access_type)) = stack.pop() {
             let node = nodes.get(id).unwrap();
             let mut entry = wildcard_accesses.entry(id);
             let access = entry.or_insert(Default::default());
@@ -261,30 +267,80 @@ impl WildcardAccessTracking {
             access.max_foreign_access = access_type;
             let exposed_as = node.exposed_as(perms.get(id).map(|p| p.permission()));
 
-            // if this node is already exposed with stronger permissions, then our foreign access wont affect
-            // this nodes children
-            if exposed_as < max(access_type, old_access_type) {
-                push_relevant_children(
-                    &mut stack,
-                    is_upgrade,
-                    access_type,
-                    access.clone(),
-                    access.clone(),
-                    node.children.iter().copied(),
-                    nodes,
-                    perms,
-                    wildcard_accesses,
-                );
-            }
+            push_relevant_children(
+                &mut stack,
+                /* other factors */ exposed_as,
+                access_type,
+                old_access_type,
+                access.clone(),
+                node.children.iter().copied(),
+                nodes,
+                perms,
+                wildcard_accesses,
+            );
         }
     }
     pub fn verify_consistency(
-        _root: UniIndex,
-        _nodes: &UniValMap<Node>,
-        _perms: &UniValMap<LocationState>,
-        _wildcard_accesses: &mut UniValMap<WildcardAccessTracking>,
+        root: UniIndex,
+        nodes: &UniValMap<Node>,
+        perms: &UniValMap<LocationState>,
+        wildcard_accesses: &mut UniValMap<WildcardAccessTracking>,
     ) {
-        todo!();
+        // TODO valid if map is empty
+        if !wildcard_accesses.contains_idx(root) {
+            return;
+        }
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let node = nodes.get(id).unwrap();
+            stack.extend(node.children.iter());
+
+            let access = wildcard_accesses.get(id).unwrap();
+
+            let max_foreign_access = if let Some(parent) = node.parent {
+                let parent_node = nodes.get(parent).unwrap();
+                let parent_perm = perms.get(parent).map(LocationState::permission);
+                let parent_access = wildcard_accesses.get(parent).unwrap();
+
+                let max_other_children = parent_node
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|child| *child != id)
+                    .map(|child| {
+                        let node = nodes.get(child).unwrap();
+                        let perm = perms.get(child).map(LocationState::permission);
+                        let access = wildcard_accesses.get(child).unwrap();
+                        access.max_child_access(node.exposed_as(perm))
+                    })
+                    .fold(WildcardAccessLevel::None, max);
+                max_other_children
+                    .max(parent_access.max_foreign_access)
+                    .max(parent_node.exposed_as(parent_perm))
+            } else {
+                WildcardAccessLevel::None
+            };
+
+            let child_accesses = node.children.iter().copied().map(|child| {
+                let node = nodes.get(child).unwrap();
+                let perm = perms.get(child).map(LocationState::permission);
+                let access = wildcard_accesses.get(child).unwrap();
+                access.max_child_access(node.exposed_as(perm))
+            });
+            let child_reads =
+                child_accesses.clone().filter(|a| *a >= WildcardAccessLevel::Read).count();
+            let child_writes = child_accesses.filter(|a| *a >= WildcardAccessLevel::Write).count();
+
+            if max_foreign_access != access.max_foreign_access {
+                panic!();
+            }
+            if child_reads != access.child_reads as usize {
+                panic!();
+            }
+            if child_writes != access.child_writes as usize {
+                panic!();
+            }
+        }
     }
 }
 impl Tree {

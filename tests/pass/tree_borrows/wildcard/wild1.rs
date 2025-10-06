@@ -3,6 +3,7 @@
 pub fn main() {
     wildcard_parallel();
     wildcard_sequence();
+    destructor();
 }
 #[allow(unused_variables)]
 pub fn wildcard_parallel() {
@@ -91,4 +92,13 @@ pub fn wildcard_sequence() {
 
     // we can still write through wild, as there is still the exposed ref1 with write permissions
     unsafe { wild.write(43) };
+}
+
+fn destructor(){
+    use std::alloc::Layout;
+    let x=unsafe{ std::alloc::alloc_zeroed(Layout::new::<u32>()) as *mut u32};
+    let ref1=unsafe{&mut *x};
+    let int=ref1 as *mut u32 as usize;
+    let wild=int as *mut u32;
+    unsafe{ std::alloc::dealloc(wild as *mut u8,Layout::new::<u32>())};
 }
