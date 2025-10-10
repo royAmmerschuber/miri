@@ -644,8 +644,8 @@ impl DisplayRepr {
                 let rperm = tree
                     .rperms
                     .iter_all()
-                    .map(move |(_offset, perms)| {
-                        let perm = perms.0.get(idx);
+                    .map(move |(_offset, loc)| {
+                        let perm = loc.perms.get(idx);
                         perm.cloned()
                     })
                     .collect::<Vec<_>>();

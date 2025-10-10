@@ -67,7 +67,7 @@ impl<'tcx> Tree {
                     span,
                 ),
             ProvenanceExtra::Wildcard =>
-                return self.perform_wildcard_access(
+                self.perform_wildcard_access(
                     Some((range, access_kind, diagnostics::AccessCause::Explicit(access_kind))),
                     global,
                     alloc_id,
@@ -253,11 +253,12 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
         };
         log_creation(this, Some((alloc_id, base_offset, parent_prov)))?;
 
-        let (orig_tag,provenance) = match parent_prov {
-            ProvenanceExtra::Wildcard => (None,Provenance::Wildcard), // TODO: handle wildcard pointers
-            ProvenanceExtra::Concrete(tag) => (Some(tag),Provenance::Concrete { alloc_id, tag: new_tag })
+        let (orig_tag, provenance) = match parent_prov {
+            ProvenanceExtra::Wildcard => (None, Provenance::Wildcard), // TODO: handle wildcard pointers
+            ProvenanceExtra::Concrete(tag) =>
+                (Some(tag), Provenance::Concrete { alloc_id, tag: new_tag }),
         };
-        let is_wildcard=orig_tag.is_none();
+        let is_wildcard = orig_tag.is_none();
 
         trace!(
             "reborrow: reference {:?} derived from {:?} (pointee {}): {:?}, size {}",
@@ -375,17 +376,25 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                     start: Size::from_bytes(perm_range.start) + base_offset,
                     size: Size::from_bytes(perm_range.end - perm_range.start),
                 };
-                if let Some(orig_tag)=orig_tag{
+                if let Some(orig_tag) = orig_tag {
                     tree_borrows.perform_access(
                         orig_tag,
-                        Some((range_in_alloc, AccessKind::Read, diagnostics::AccessCause::Reborrow)),
+                        Some((
+                            range_in_alloc,
+                            AccessKind::Read,
+                            diagnostics::AccessCause::Reborrow,
+                        )),
                         this.machine.borrow_tracker.as_ref().unwrap(),
                         alloc_id,
                         this.machine.current_span(),
                     )?;
-                }else{
+                } else {
                     tree_borrows.perform_wildcard_access(
-                        Some((range_in_alloc, AccessKind::Read, diagnostics::AccessCause::Reborrow)),
+                        Some((
+                            range_in_alloc,
+                            AccessKind::Read,
+                            diagnostics::AccessCause::Reborrow,
+                        )),
                         this.machine.borrow_tracker.as_ref().unwrap(),
                         alloc_id,
                         this.machine.current_span(),
@@ -406,7 +415,7 @@ trait EvalContextPrivExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
                 }
             }
         }
-        if let Some(orig_tag)=orig_tag{
+        if let Some(orig_tag) = orig_tag {
             // Record the parent-child pair in the tree.
             tree_borrows.new_child(
                 base_offset,

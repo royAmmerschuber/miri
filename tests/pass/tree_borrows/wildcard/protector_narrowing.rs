@@ -1,7 +1,7 @@
 //@compile-flags: -Zmiri-tree-borrows -Zmiri-permissive-provenance
 // NOTE: this file documents UB that is not detected by wildcard provenance.
 
-pub fn main(){
+pub fn main() {
     protected_exposed();
     protected_wildcard();
 }
@@ -58,15 +58,15 @@ pub fn protected_exposed() {
 // we currently ignore, if a wildcard pointer has a protector
 #[allow(unused_variables)]
 pub fn protected_wildcard() {
-    let mut x:u32=32;
-    let ref1=&mut x;
-    let ref2=&mut *ref1;
+    let mut x: u32 = 32;
+    let ref1 = &mut x;
+    let ref2 = &mut *ref1;
 
-    let int=ref2 as *mut u32 as usize;
-    let wild=int as *mut u32;
-    let wild_ref=unsafe{&mut *wild};
+    let int = ref2 as *mut u32 as usize;
+    let wild = int as *mut u32;
+    let wild_ref = unsafe { &mut *wild };
 
-    let mut protect=|arg:&mut u32|{
+    let mut protect = |arg: &mut u32| {
         // arg is a protected pointer with wildcard provenance
         //    ┌────────────┐
         //    │            │
@@ -84,10 +84,9 @@ pub fn protected_wildcard() {
 
         // writes to ref1 disabling ref2, which also disables all wildcard references.
         // since a wildcard reference is protected this is UB.
-        *ref1=13;
+        *ref1 = 13;
     };
 
     //we pass a pointer with wildcard provenance
     protect(wild_ref);
-
 }

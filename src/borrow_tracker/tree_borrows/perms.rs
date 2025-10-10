@@ -373,6 +373,8 @@ impl Permission {
     pub fn strongest_idempotent_foreign_access(&self, prot: bool) -> IdempotentForeignAccess {
         self.inner.strongest_idempotent_foreign_access(prot)
     }
+    /// Returns the strongest access allowed from a child to this node without
+    /// causing UB (not accounting for protectors)
     pub fn strongest_allowed_child_access(&self) -> WildcardAccessLevel {
         match self.inner {
             Disabled => WildcardAccessLevel::None,

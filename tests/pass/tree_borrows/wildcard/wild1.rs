@@ -5,6 +5,7 @@ pub fn main() {
     wildcard_sequence();
     destructor();
     protector();
+    returned_mut_is_usable();
 }
 #[allow(unused_variables)]
 pub fn wildcard_parallel() {
@@ -95,26 +96,45 @@ pub fn wildcard_sequence() {
     unsafe { wild.write(43) };
 }
 
-fn destructor(){
+fn destructor() {
     use std::alloc::Layout;
-    let x=unsafe{ std::alloc::alloc_zeroed(Layout::new::<u32>()) as *mut u32};
-    let ref1=unsafe{&mut *x};
-    let int=ref1 as *mut u32 as usize;
-    let wild=int as *mut u32;
-    unsafe{ std::alloc::dealloc(wild as *mut u8,Layout::new::<u32>())};
+    let x = unsafe { std::alloc::alloc_zeroed(Layout::new::<u32>()) as *mut u32 };
+    let ref1 = unsafe { &mut *x };
+    let int = ref1 as *mut u32 as usize;
+    let wild = int as *mut u32;
+    unsafe { std::alloc::dealloc(wild as *mut u8, Layout::new::<u32>()) };
 }
 
-fn protector(){
-    fn protect(arg:&mut u32){
-        *arg=4;
+fn protector() {
+    fn protect(arg: &mut u32) {
+        *arg = 4;
     }
-    let mut x:u32=32;
-    let ref1=&mut x;
-    let int=ref1 as *mut u32 as usize;
-    let wild=int as *mut u32;
-    let wild_ref=unsafe{&mut *wild};
+    let mut x: u32 = 32;
+    let ref1 = &mut x;
+    let int = ref1 as *mut u32 as usize;
+    let wild = int as *mut u32;
+    let wild_ref = unsafe { &mut *wild };
 
     protect(wild_ref);
 
-    assert_eq!(*ref1,4);
+    assert_eq!(*ref1, 4);
+}
+
+// analogous to same test in `../tree-borrows.rs` but with a protected wildcard pointer
+fn returned_mut_is_usable() {
+    // NOTE: currently we ignore protectors on wildcard references
+    fn reborrow(x: &mut u8) -> &mut u8 {
+        let y = &mut *x;
+        // Activate the reference so that it is vulnerable to foreign reads.
+        *y = *y;
+        y
+        // An implicit read through `x` is inserted here.
+    }
+    let mut x: u8 = 0;
+    let ref1 = &mut x;
+    let int = ref1 as *mut u8 as usize;
+    let wild = int as *mut u8;
+    let wild_ref = unsafe { &mut *wild };
+    let y = reborrow(wild_ref);
+    *y = 1;
 }
