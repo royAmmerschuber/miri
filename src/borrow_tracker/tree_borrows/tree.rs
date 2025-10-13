@@ -21,7 +21,7 @@ use smallvec::SmallVec;
 use super::wildcard::{WildcardAccessLevel, WildcardAccessTracking};
 use crate::borrow_tracker::tree_borrows::Permission;
 use crate::borrow_tracker::tree_borrows::diagnostics::{
-    self, HistoryData, NodeDebugInfo, TbError, TransitionError, no_valid_exposed_references_error,
+    self, NodeDebugInfo, TbError, TransitionError, no_valid_exposed_references_error,
 };
 use crate::borrow_tracker::tree_borrows::foreign_access_skipping::IdempotentForeignAccess;
 use crate::borrow_tracker::tree_borrows::perms::PermTransition;
@@ -571,21 +571,6 @@ impl<'tree> TreeVisitor<'tree> {
         stack.finish_foreign_accesses(&mut self)
     }
 
-    /// Like `traverse_this_parents_children_other`, but skips the children of `start`.
-    fn traverse_nonchildren<InnErr, OutErr>(
-        self,
-        start: BorTag,
-        f_continue: impl Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
-        f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
-        err_builder: impl Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
-    ) -> Result<(), OutErr> {
-        let f_propagate = |idx, rel_pos, this: &mut TreeVisitor<'_>| {
-            let node = this.nodes.get_mut(idx).unwrap();
-            let perm = this.perms.entry(idx);
-            f_propagate(NodeAppArgs { node, perm, rel_pos })
-        };
-        self.traverse_nonchildren_raw(start, f_continue, f_propagate, err_builder)
-    }
     /// Like `traverse_this_parents_children_other_raw`, but skips the children of `start`.
     fn traverse_nonchildren_raw<InnErr, OutErr>(
         mut self,
@@ -1234,7 +1219,10 @@ impl<'tcx> Tree {
                     };
 
                     //update idempototent foreign access data
-                    if matches!(perm.skip_if_known_noop(access_kind, relatedness),ContinueTraversal::Recurse){
+                    if matches!(
+                        perm.skip_if_known_noop(access_kind, relatedness),
+                        ContinueTraversal::Recurse
+                    ) {
                         perm.record_new_access(access_kind, relatedness);
                     }
 

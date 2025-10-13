@@ -159,7 +159,6 @@ impl WildcardAccessTracking {
             let access_type = max(access_type, other_factors);
             let old_access_type = max(old_access_type, other_factors);
 
-
             use WildcardAccessLevel::*;
             let child_accesses = if max(access_type, old_access_type) == Write {
                 // None -> Write
@@ -313,16 +312,25 @@ impl WildcardAccessTracking {
                 wildcard_accesses,
             );
         }
+        #[cfg(feature = "expensive-consistency-checks")]
+        Self::verify_consistency(id, nodes, perms, wildcard_accesses)
     }
     /// verifies that the access tracking state is consistent
     ///
     /// panics if invalid
+    #[cfg(feature = "expensive-consistency-checks")]
     pub fn verify_consistency(
-        root: UniIndex,
+        id: UniIndex,
         nodes: &UniValMap<Node>,
         perms: &UniValMap<LocationState>,
-        wildcard_accesses: &mut UniValMap<WildcardAccessTracking>,
+        wildcard_accesses: &UniValMap<WildcardAccessTracking>,
     ) {
+        // find root node
+        let mut root = id;
+        while let Some(parent) = nodes.get(root).and_then(|n| n.parent) {
+            root = parent;
+        }
+
         // TODO valid if map is empty
         if !wildcard_accesses.contains_idx(root) {
             return;
@@ -369,17 +377,11 @@ impl WildcardAccessTracking {
             let expected_child_writes =
                 child_accesses.filter(|a| *a >= WildcardAccessLevel::Write).count();
 
-            if expected_max_foreign_access != access.max_foreign_access {
-                panic!();
-            }
+            assert_eq!(expected_max_foreign_access, access.max_foreign_access);
             let child_reads: usize = access.child_reads.into();
-            if expected_child_reads != child_reads {
-                panic!();
-            }
-            let child_writes: usize = access.child_reads.into();
-            if expected_child_writes != child_writes {
-                panic!();
-            }
+            assert_eq!(expected_child_reads, child_reads);
+            let child_writes: usize = access.child_writes.into();
+            assert_eq!(expected_child_writes, child_writes);
         }
     }
 }
