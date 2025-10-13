@@ -1,11 +1,24 @@
-use rand::Rng;
-use rustc_apfloat::{self, Float, Round};
+use rustc_apfloat::{self, Float, FloatConvert, Round};
 use rustc_middle::mir;
 use rustc_middle::ty::{self, FloatTy};
 
 use self::helpers::{ToHost, ToSoft};
 use super::check_intrinsic_arg_count;
 use crate::*;
+
+fn sqrt<'tcx, F: Float + FloatConvert<F> + Into<Scalar>>(
+    this: &mut MiriInterpCx<'tcx>,
+    args: &[OpTy<'tcx>],
+    dest: &MPlaceTy<'tcx>,
+) -> InterpResult<'tcx> {
+    let [f] = check_intrinsic_arg_count(args)?;
+    let f = this.read_scalar(f)?;
+    let f: F = f.to_float()?;
+    // Sqrt is specified to be fully precise.
+    let res = math::sqrt(f);
+    let res = this.adjust_nan(res, &[f]);
+    this.write_scalar(res, dest)
+}
 
 impl<'tcx> EvalContextExt<'tcx> for crate::MiriInterpCx<'tcx> {}
 pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
@@ -20,62 +33,10 @@ pub trait EvalContextExt<'tcx>: crate::MiriInterpCxExt<'tcx> {
 
         match intrinsic_name {
             // Operations we can do with soft-floats.
-            "sqrtf32" => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f32()?;
-                // Sqrt is specified to be fully precise.
-                let res = math::sqrt(f);
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-            "sqrtf64" => {
-                let [f] = check_intrinsic_arg_count(args)?;
-                let f = this.read_scalar(f)?.to_f64()?;
-                // Sqrt is specified to be fully precise.
-                let res = math::sqrt(f);
-                let res = this.adjust_nan(res, &[f]);
-                this.write_scalar(res, dest)?;
-            }
-
-            "fmaf32" => {
-                let [a, b, c] = check_intrinsic_arg_count(args)?;
-                let a = this.read_scalar(a)?.to_f32()?;
-                let b = this.read_scalar(b)?.to_f32()?;
-                let c = this.read_scalar(c)?.to_f32()?;
-                let res = a.mul_add(b, c).value;
-                let res = this.adjust_nan(res, &[a, b, c]);
-                this.write_scalar(res, dest)?;
-            }
-            "fmaf64" => {
-                let [a, b, c] = check_intrinsic_arg_count(args)?;
-                let a = this.read_scalar(a)?.to_f64()?;
-                let b = this.read_scalar(b)?.to_f64()?;
-                let c = this.read_scalar(c)?.to_f64()?;
-                let res = a.mul_add(b, c).value;
-                let res = this.adjust_nan(res, &[a, b, c]);
-                this.write_scalar(res, dest)?;
-            }
-
-            "fmuladdf32" => {
-                let [a, b, c] = check_intrinsic_arg_count(args)?;
-                let a = this.read_scalar(a)?.to_f32()?;
-                let b = this.read_scalar(b)?.to_f32()?;
-                let c = this.read_scalar(c)?.to_f32()?;
-                let fuse: bool = this.machine.float_nondet && this.machine.rng.get_mut().random();
-                let res = if fuse { a.mul_add(b, c).value } else { ((a * b).value + c).value };
-                let res = this.adjust_nan(res, &[a, b, c]);
-                this.write_scalar(res, dest)?;
-            }
-            "fmuladdf64" => {
-                let [a, b, c] = check_intrinsic_arg_count(args)?;
-                let a = this.read_scalar(a)?.to_f64()?;
-                let b = this.read_scalar(b)?.to_f64()?;
-                let c = this.read_scalar(c)?.to_f64()?;
-                let fuse: bool = this.machine.float_nondet && this.machine.rng.get_mut().random();
-                let res = if fuse { a.mul_add(b, c).value } else { ((a * b).value + c).value };
-                let res = this.adjust_nan(res, &[a, b, c]);
-                this.write_scalar(res, dest)?;
-            }
+            "sqrtf16" => sqrt::<rustc_apfloat::ieee::Half>(this, args, dest)?,
+            "sqrtf32" => sqrt::<rustc_apfloat::ieee::Single>(this, args, dest)?,
+            "sqrtf64" => sqrt::<rustc_apfloat::ieee::Double>(this, args, dest)?,
+            "sqrtf128" => sqrt::<rustc_apfloat::ieee::Quad>(this, args, dest)?,
 
             #[rustfmt::skip]
             | "fadd_fast"

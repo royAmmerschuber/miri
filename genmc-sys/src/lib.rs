@@ -27,6 +27,7 @@ static GENMC_LOG_LEVEL: OnceLock<LogLevel> = OnceLock::new();
 pub fn create_genmc_driver_handle(
     params: &GenmcParams,
     genmc_log_level: LogLevel,
+    do_estimation: bool,
 ) -> UniquePtr<MiriGenmcShim> {
     // SAFETY: Only setting the GenMC log level once is guaranteed by the `OnceLock`.
     // No other place calls `set_log_level_raw`, so the `logLevel` value in GenMC will not change once we initialize it once.
@@ -40,20 +41,25 @@ pub fn create_genmc_driver_handle(
         }),
         "Attempt to change the GenMC log level after it was already set"
     );
-    unsafe { MiriGenmcShim::create_handle(params) }
+    unsafe { MiriGenmcShim::create_handle(params, do_estimation) }
 }
 
 impl GenmcScalar {
-    pub const UNINIT: Self = Self { value: 0, is_init: false };
+    pub const UNINIT: Self = Self { value: 0, extra: 0, is_init: false };
 
     pub const fn from_u64(value: u64) -> Self {
-        Self { value, is_init: true }
+        Self { value, extra: 0, is_init: true }
+    }
+
+    pub const fn has_provenance(&self) -> bool {
+        self.extra != 0
     }
 }
 
 impl Default for GenmcParams {
     fn default() -> Self {
         Self {
+            estimation_max: 1000, // default taken from GenMC
             print_random_schedule_seed: false,
             do_symmetry_reduction: false,
             // GenMC graphs can be quite large since Miri produces a lot of (non-atomic) events.
@@ -67,6 +73,20 @@ impl Default for LogLevel {
     fn default() -> Self {
         // FIXME(genmc): set `Tip` by default once the GenMC tips are relevant to Miri.
         Self::Warning
+    }
+}
+
+impl FromStr for SchedulePolicy {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "wf" => SchedulePolicy::WF,
+            "wfr" => SchedulePolicy::WFR,
+            "arbitrary" | "random" => SchedulePolicy::Arbitrary,
+            "ltr" => SchedulePolicy::LTR,
+            _ => return Err("invalid scheduling policy"),
+        })
     }
 }
 
@@ -92,9 +112,12 @@ mod ffi {
     /**** Types shared between Miri/Rust and Miri/C++ through cxx_bridge: ****/
 
     /// Parameters that will be given to GenMC for setting up the model checker.
-    /// (The fields of this struct are visible to both Rust and C++)
+    /// The fields of this struct are visible to both Rust and C++.
+    /// Note that this struct is #[repr(C)], so the order of fields matters.
     #[derive(Clone, Debug)]
     struct GenmcParams {
+        /// Maximum number of executions explored in estimation mode.
+        pub estimation_max: u32,
         pub print_random_schedule_seed: bool,
         pub do_symmetry_reduction: bool,
         pub print_execution_graphs: ExecutiongraphPrinting,
@@ -143,10 +166,16 @@ mod ffi {
     }
 
     /// This type corresponds to `Option<SVal>` (or `std::optional<SVal>`), where `SVal` is the type that GenMC uses for storing values.
-    /// CXX doesn't support `std::optional` currently, so we need to use an extra `bool` to define whether this value is initialized or not.
     #[derive(Debug, Clone, Copy)]
     struct GenmcScalar {
+        /// The raw byte-level value (discarding provenance, if any) of this scalar.
         value: u64,
+        /// This is zero for integer values. For pointers, this encodes the provenance by
+        /// storing the base address of the allocation that this pointer belongs to.
+        /// Operations on `SVal` in GenMC (e.g., `fetch_add`) preserve the `extra` of the left argument (`left.fetch_add(right, ...)`).
+        extra: u64,
+        /// Indicates whether this value is initialized. If this is `false`, the other fields do not matter.
+        /// (Ideally we'd use `std::optional` but CXX does not support that.)
         is_init: bool,
     }
 
@@ -154,6 +183,7 @@ mod ffi {
     #[derive(Debug, Clone, Copy)]
     enum ExecutionState {
         Ok,
+        Error,
         Blocked,
         Finished,
     }
@@ -163,6 +193,19 @@ mod ffi {
     struct SchedulingResult {
         exec_state: ExecutionState,
         next_thread: i32,
+    }
+
+    #[must_use]
+    #[derive(Debug)]
+    struct EstimationResult {
+        /// Expected number of total executions.
+        mean: f64,
+        /// Standard deviation of the total executions estimate.
+        sd: f64,
+        /// Number of explored executions during the estimation.
+        explored_execs: u64,
+        /// Number of encounteded blocked executions during the estimation.
+        blocked_execs: u64,
     }
 
     #[must_use]
@@ -211,16 +254,37 @@ mod ffi {
         is_coherence_order_maximal_write: bool,
     }
 
+    #[must_use]
+    #[derive(Debug)]
+    struct MutexLockResult {
+        /// If there was an error, it will be stored in `error`, otherwise it is `None`.
+        error: UniquePtr<CxxString>,
+        /// If true, GenMC determined that we should retry the mutex lock operation once the thread attempting to lock is scheduled again.
+        is_reset: bool,
+        /// Indicate whether the lock was acquired by this thread.
+        is_lock_acquired: bool,
+    }
+
     /**** These are GenMC types that we have to copy-paste here since cxx does not support
     "importing" externally defined C++ types. ****/
+
+    #[derive(Clone, Copy, Debug)]
+    enum SchedulePolicy {
+        LTR,
+        WF,
+        WFR,
+        Arbitrary,
+    }
 
     #[derive(Debug)]
     /// Corresponds to GenMC's type with the same name.
     /// Should only be modified if changed by GenMC.
     enum ActionKind {
-        /// Any Mir terminator that's atomic and has load semantics.
+        /// Any MIR terminator that's atomic and that may have load semantics.
+        /// This includes functions with atomic properties, such as `pthread_create`.
+        /// If the exact type of the terminator cannot be determined, load is a safe default `Load`.
         Load,
-        /// Anything that's not a `Load`.
+        /// Anything that's definitely not a `Load`.
         NonLoad,
     }
 
@@ -252,6 +316,13 @@ mod ffi {
         UMin = 10,
     }
 
+    #[derive(Debug)]
+    enum AssumeType {
+        User = 0,
+        Barrier = 1,
+        Spinloop = 2,
+    }
+
     // # Safety
     //
     // This block is unsafe to allow defining safe methods inside.
@@ -270,8 +341,10 @@ mod ffi {
         (This tells cxx that the enums defined above are already defined on the C++ side;
         it will emit assertions to ensure that the two definitions agree.) ****/
         type ActionKind;
+        type AssumeType;
         type MemOrdering;
         type RMWBinOp;
+        type SchedulePolicy;
 
         /// Set the log level for GenMC.
         ///
@@ -295,7 +368,10 @@ mod ffi {
         /// start creating handles.
         /// There should not be any other (safe) way to create a `MiriGenmcShim`.
         #[Self = "MiriGenmcShim"]
-        unsafe fn create_handle(params: &GenmcParams) -> UniquePtr<MiriGenmcShim>;
+        unsafe fn create_handle(
+            params: &GenmcParams,
+            estimation_mode: bool,
+        ) -> UniquePtr<MiriGenmcShim>;
         /// Get the bit mask that GenMC expects for global memory allocations.
         fn get_global_alloc_static_mask() -> u64;
 
@@ -360,13 +436,44 @@ mod ffi {
             size: u64,
             alignment: u64,
         ) -> u64;
-        fn handle_free(self: Pin<&mut MiriGenmcShim>, thread_id: i32, address: u64);
+        /// Returns true if an error was found.
+        fn handle_free(self: Pin<&mut MiriGenmcShim>, thread_id: i32, address: u64) -> bool;
 
         /**** Thread management ****/
         fn handle_thread_create(self: Pin<&mut MiriGenmcShim>, thread_id: i32, parent_id: i32);
         fn handle_thread_join(self: Pin<&mut MiriGenmcShim>, thread_id: i32, child_id: i32);
         fn handle_thread_finish(self: Pin<&mut MiriGenmcShim>, thread_id: i32, ret_val: u64);
         fn handle_thread_kill(self: Pin<&mut MiriGenmcShim>, thread_id: i32);
+
+        /**** Blocking instructions ****/
+        /// Inform GenMC that the thread should be blocked.
+        /// Note: this function is currently hardcoded for `AssumeType::User`, corresponding to user supplied assume statements.
+        /// This can become a parameter once more types of assumes are added.
+        fn handle_assume_block(
+            self: Pin<&mut MiriGenmcShim>,
+            thread_id: i32,
+            assume_type: AssumeType,
+        );
+
+        /**** Mutex handling ****/
+        fn handle_mutex_lock(
+            self: Pin<&mut MiriGenmcShim>,
+            thread_id: i32,
+            address: u64,
+            size: u64,
+        ) -> MutexLockResult;
+        fn handle_mutex_try_lock(
+            self: Pin<&mut MiriGenmcShim>,
+            thread_id: i32,
+            address: u64,
+            size: u64,
+        ) -> MutexLockResult;
+        fn handle_mutex_unlock(
+            self: Pin<&mut MiriGenmcShim>,
+            thread_id: i32,
+            address: u64,
+            size: u64,
+        ) -> StoreResult;
 
         /***** Exploration related functionality *****/
 
@@ -403,5 +510,10 @@ mod ffi {
         fn get_result_message(self: &MiriGenmcShim) -> UniquePtr<CxxString>;
         /// If an error occurred, return a string describing the error, otherwise, return `nullptr`.
         fn get_error_string(self: &MiriGenmcShim) -> UniquePtr<CxxString>;
+
+        /**** Printing functionality. ****/
+
+        /// Get the results of a run in estimation mode.
+        fn get_estimation_results(self: &MiriGenmcShim) -> EstimationResult;
     }
 }

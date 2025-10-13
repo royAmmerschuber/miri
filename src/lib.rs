@@ -1,4 +1,3 @@
-#![cfg_attr(bootstrap, feature(strict_overflow_ops))]
 #![feature(abort_unwind)]
 #![feature(cfg_select)]
 #![feature(rustc_private)]
@@ -18,7 +17,7 @@
 #![feature(derive_coerce_pointee)]
 #![feature(arbitrary_self_types)]
 #![feature(iter_advance_by)]
-#![feature(duration_from_nanos_u128)]
+#![cfg_attr(not(bootstrap), feature(duration_from_nanos_u128))]
 // Configure clippy and other lints
 #![allow(
     clippy::collapsible_else_if,
@@ -61,6 +60,7 @@ extern crate rustc_ast;
 extern crate rustc_const_eval;
 extern crate rustc_data_structures;
 extern crate rustc_errors;
+extern crate rustc_hash;
 extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_middle;
@@ -110,6 +110,7 @@ pub type StrictPointer = interpret::Pointer<machine::Provenance>;
 pub type Scalar = interpret::Scalar<machine::Provenance>;
 pub type ImmTy<'tcx> = interpret::ImmTy<'tcx, machine::Provenance>;
 pub type OpTy<'tcx> = interpret::OpTy<'tcx, machine::Provenance>;
+pub type FnArg<'tcx> = interpret::FnArg<'tcx, machine::Provenance>;
 pub type PlaceTy<'tcx> = interpret::PlaceTy<'tcx, machine::Provenance>;
 pub type MPlaceTy<'tcx> = interpret::MPlaceTy<'tcx, machine::Provenance>;
 
