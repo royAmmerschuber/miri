@@ -1232,6 +1232,12 @@ impl<'tcx> Tree {
                         //if the access type is either, then we do not apply any transition
                         continue;
                     };
+
+                    //update idempototent foreign access data
+                    if matches!(perm.skip_if_known_noop(access_kind, relatedness),ContinueTraversal::Recurse){
+                        perm.record_new_access(access_kind, relatedness);
+                    }
+
                     let old_permission = perm.permission;
                     let transition = perm
                         .perform_access(access_kind, relatedness, protected)
