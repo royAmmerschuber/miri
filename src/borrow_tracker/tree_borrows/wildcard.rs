@@ -86,7 +86,6 @@ impl WildcardState {
             },
         )
     }
-
     /// From where relative to the node with this wildcard info a read or write access could happen.
     pub fn access_relatedness(&self, kind: AccessKind) -> Option<WildcardAccessRelatedness> {
         match kind {
@@ -130,6 +129,9 @@ impl WildcardState {
             max_foreign_access: max(self.max_foreign_access, self.max_local_access()),
             ..Default::default()
         }
+    }
+    pub fn for_wildcard_root() -> Self {
+        Self { max_foreign_access: WildcardAccessLevel::Write, ..Default::default() }
     }
 
     /// Pushes the nodes of `children` onto the stack who's `max_foreign_access`
@@ -477,7 +479,11 @@ impl Tree {
                         .max(parent_state.max_foreign_access)
                         .max(parent_state.exposed_as)
                 } else {
-                    WildcardAccessLevel::None
+                    if self.root == id {
+                        WildcardAccessLevel::None
+                    } else {
+                        WildcardAccessLevel::Write
+                    }
                 };
 
                 // Count how many children can be the source of wildcard reads or writes
