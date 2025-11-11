@@ -20,7 +20,7 @@ use rustc_span::Span;
 use smallvec::SmallVec;
 
 use super::diagnostics::AccessCause;
-use super::wildcard::{WildcardAccessRelatedness, WildcardState};
+use super::wildcard::WildcardState;
 use crate::borrow_tracker::tree_borrows::Permission;
 use crate::borrow_tracker::tree_borrows::diagnostics::{
     self, NodeDebugInfo, TbError, TransitionError, no_valid_exposed_references_error,
@@ -347,12 +347,13 @@ struct TreeVisitor<'tree> {
 }
 
 /// Whether to continue exploring the children recursively or not.
+#[derive(Debug)]
 enum ContinueTraversal {
     Recurse,
     SkipSelfAndChildren,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum ChildrenVisitMode {
     VisitChildrenOfAccessed,
     SkipChildrenOfAccessed,
@@ -676,6 +677,8 @@ impl<'tcx> Tree {
             let parent_node = self.nodes.get_mut(parent_idx).unwrap();
             // Register new_tag as a child of parent_tag
             parent_node.children.push(idx);
+        } else {
+            self.wildcard_roots.push(idx);
         }
 
         // We need to know the weakest SIFA for `update_idempotent_foreign_access_after_retag`.
@@ -1111,9 +1114,7 @@ impl<'tcx> LocationTree {
             assert!(matches!(visit_children, ChildrenVisitMode::VisitChildrenOfAccessed));
             None
         };
-        if let Some(accessed_root) = accessed_root
-            && accessed_root != root
-        {
+        if accessed_root != Some(root) {
             self.perform_wildcard_access(
                 root,
                 /*only_foreign*/ false,
@@ -1268,8 +1269,9 @@ impl<'tcx> LocationTree {
                     // then check if we can skip the entire subtree because the access might not
                     // change any permissions here anyway.
                     if let Some(relatedness) = wildcard_state.access_relatedness(access_kind)
-                        && let Some(relatedness) = relatedness.to_relatedness()
+                        && let Some(relatedness) = relatedness.to_relatedness(only_foreign)
                     {
+                        
                         old_state.skip_if_known_noop(access_kind, relatedness)
                     } else {
                         ContinueTraversal::Recurse
@@ -1301,26 +1303,24 @@ impl<'tcx> LocationTree {
                         ));
                     };
 
-                    let relatedness = if only_foreign {
-                        assert!(matches!(
-                            wildcard_relatedness,
-                            WildcardAccessRelatedness::ForeignAccess
-                                | WildcardAccessRelatedness::EitherAccess,
-                        ));
-                        AccessRelatedness::ForeignAccess
-                    } else {
+                    // If the access type is Either, then we do not apply any transition
+                    // to this node, but we still update each of its children.
+                    let Some(relatedness) = wildcard_relatedness.to_relatedness(only_foreign)
+                    else {
                         // If the access type is Either, then we do not apply any transition
                         // to this node, but we still update each of its children.
-                        if let Some(relatedness) = wildcard_relatedness.to_relatedness() {
-                            relatedness
-                        } else {
-                            // If the access type is Either, then we do not apply any transition
-                            // to this node, but we still update each of its children.
-                            // This is an imprecision! In the future, maybe we can still do some sort
-                            // of best-effort update here.
-                            return Ok(());
-                        }
+                        // This is an imprecision! In the future, maybe we can still do some sort
+                        // of best-effort update here.
+                        return Ok(());
                     };
+                    if args.idx == root
+                        && matches!(
+                            perm.skip_if_known_noop(access_kind, relatedness),
+                            ContinueTraversal::SkipSelfAndChildren
+                        )
+                    {
+                        return Ok(());
+                    }
 
                     // We know the exact relatedness, so we can actually do precise checks.
                     perm.perform_transition(
