@@ -336,18 +336,6 @@ struct NodeAppArgs<'visit> {
     /// The permissions map of this tree.
     loc: &'visit mut LocationTree,
 }
-/// Data given to the error handler
-struct ErrHandlerArgs<'node, InErr> {
-    /// Kind of error that occurred
-    error_kind: InErr,
-    /// Tag that triggered the error (not the tag that was accessed,
-    /// rather the parent tag that had insufficient permissions or the
-    /// non-parent tag that had a protector).
-    conflicting_info: &'node NodeDebugInfo,
-    /// Information about the tag that was accessed just before the
-    /// error was triggered.
-    accessed_info: &'node NodeDebugInfo,
-}
 /// Internal contents of `Tree` with the minimum of mutable access for
 /// the purposes of the tree traversal functions: the permissions (`perms`) can be
 /// updated but not the tree structure (`tag_mapping` and `nodes`)
@@ -376,16 +364,12 @@ enum RecursionState {
 /// Stack of nodes left to explore in a tree traversal.
 /// See the docs of `traverse_this_parents_children_other` for details on the
 /// traversal order.
-struct TreeVisitorStack<NodeContinue, NodeApp, ErrHandler> {
-    /// Identifier of the original access.
-    initial: UniIndex,
+struct TreeVisitorStack<NodeContinue, NodeApp> {
     /// Function describing whether to continue at a tag.
     /// This is only invoked for foreign accesses.
     f_continue: NodeContinue,
     /// Function to apply to each tag.
     f_propagate: NodeApp,
-    /// Handler to add the required context to diagnostics.
-    err_builder: ErrHandler,
     /// Mutable state of the visit: the tags left to handle.
     /// Every tag pushed should eventually be handled,
     /// and the precise order is relevant for diagnostics.
@@ -397,12 +381,10 @@ struct TreeVisitorStack<NodeContinue, NodeApp, ErrHandler> {
     stack: Vec<(UniIndex, AccessRelatedness, RecursionState)>,
 }
 
-impl<NodeContinue, NodeApp, InnErr, OutErr, ErrHandler>
-    TreeVisitorStack<NodeContinue, NodeApp, ErrHandler>
+impl<NodeContinue, NodeApp, Err> TreeVisitorStack<NodeContinue, NodeApp>
 where
     NodeContinue: Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
-    NodeApp: Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
-    ErrHandler: Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
+    NodeApp: Fn(NodeAppArgs<'_>) -> Result<(), Err>,
 {
     fn should_continue_at(
         &self,
@@ -419,16 +401,8 @@ where
         this: &mut TreeVisitor<'_>,
         idx: UniIndex,
         rel_pos: AccessRelatedness,
-    ) -> Result<(), OutErr> {
-        (self.f_propagate)(NodeAppArgs { idx, rel_pos, nodes: this.nodes, loc: this.loc }).map_err(
-            |error_kind| {
-                (self.err_builder)(ErrHandlerArgs {
-                    error_kind,
-                    conflicting_info: &this.nodes.get(idx).unwrap().debug_info,
-                    accessed_info: &this.nodes.get(self.initial).unwrap().debug_info,
-                })
-            },
-        )
+    ) -> Result<(), Err> {
+        (self.f_propagate)(NodeAppArgs { idx, rel_pos, nodes: this.nodes, loc: this.loc })
     }
 
     fn go_upwards_from_accessed(
@@ -436,7 +410,7 @@ where
         this: &mut TreeVisitor<'_>,
         accessed_node: UniIndex,
         visit_children: ChildrenVisitMode,
-    ) -> Result<(), OutErr> {
+    ) -> Result<(), Err> {
         // We want to visit the accessed node's children first.
         // However, we will below walk up our parents and push their children (our cousins)
         // onto the stack. To ensure correct iteration order, this method thus finishes
@@ -484,7 +458,7 @@ where
         Ok(())
     }
 
-    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_>) -> Result<(), OutErr> {
+    fn finish_foreign_accesses(&mut self, this: &mut TreeVisitor<'_>) -> Result<(), Err> {
         while let Some((idx, rel_pos, step)) = self.stack.last_mut() {
             let idx = *idx;
             let rel_pos = *rel_pos;
@@ -520,13 +494,8 @@ where
         Ok(())
     }
 
-    fn new(
-        initial: UniIndex,
-        f_continue: NodeContinue,
-        f_propagate: NodeApp,
-        err_builder: ErrHandler,
-    ) -> Self {
-        Self { initial, f_continue, f_propagate, err_builder, stack: Vec::new() }
+    fn new(f_continue: NodeContinue, f_propagate: NodeApp) -> Self {
+        Self { f_continue, f_propagate, stack: Vec::new() }
     }
 }
 
@@ -567,14 +536,13 @@ impl<'tree> TreeVisitor<'tree> {
     /// Finally, remember that the iteration order is not relevant for UB, it only affects
     /// diagnostics. It also affects tree traversal optimizations built on top of this, so
     /// those need to be reviewed carefully as well whenever this changes.
-    fn traverse_this_parents_children_other<InnErr, OutErr>(
+    fn traverse_this_parents_children_other<Err>(
         mut self,
         start_idx: UniIndex,
         f_continue: impl Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
-        f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
-        err_builder: impl Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
-    ) -> Result<(), OutErr> {
-        let mut stack = TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder);
+        f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), Err>,
+    ) -> Result<(), Err> {
+        let mut stack = TreeVisitorStack::new(f_continue, f_propagate);
         // Visits the accessed node itself, and all its parents, i.e. all nodes
         // undergoing a child access. Also pushes the children and the other
         // cousin nodes (i.e. all nodes undergoing a foreign access) to the stack
@@ -591,14 +559,13 @@ impl<'tree> TreeVisitor<'tree> {
     }
 
     /// Like `traverse_this_parents_children_other`, but skips the children of `start`.
-    fn traverse_nonchildren<InnErr, OutErr>(
+    fn traverse_nonchildren<Err>(
         mut self,
         start_idx: UniIndex,
         f_continue: impl Fn(&NodeAppArgs<'_>) -> ContinueTraversal,
-        f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), InnErr>,
-        err_builder: impl Fn(ErrHandlerArgs<'_, InnErr>) -> OutErr,
-    ) -> Result<(), OutErr> {
-        let mut stack = TreeVisitorStack::new(start_idx, f_continue, f_propagate, err_builder);
+        f_propagate: impl Fn(NodeAppArgs<'_>) -> Result<(), Err>,
+    ) -> Result<(), Err> {
+        let mut stack = TreeVisitorStack::new(f_continue, f_propagate);
         // Visits the accessed node itself, and all its parents, i.e. all nodes
         // undergoing a child access. Also pushes the other cousin nodes to the
         // stack, but not the children of the accessed node.
@@ -818,7 +785,7 @@ impl<'tcx> Tree {
                 start_idx,
                 // Visit all children, skipping none.
                 |_| ContinueTraversal::Recurse,
-                |args: NodeAppArgs<'_>| -> Result<(), TransitionError> {
+                |args: NodeAppArgs<'_>| {
                     let node = args.nodes.get(args.idx).unwrap();
                     let perm = args.loc.perms.entry(args.idx);
 
@@ -831,28 +798,22 @@ impl<'tcx> Tree {
                             // Only trigger UB if the accessed bit is set, i.e. if the protector is actually protecting this offset. See #4579.
                             && perm.accessed
                     {
-                        Err(TransitionError::ProtectedDealloc)
+                        Err(TbError {
+                            conflicting_info: &node.debug_info,
+                            access_cause: diagnostics::AccessCause::Dealloc,
+                            alloc_id,
+                            error_offset: loc_range.start,
+                            error_kind: TransitionError::ProtectedDealloc,
+                            accessed_info: match prov {
+                                ProvenanceExtra::Concrete(_) =>
+                                    Some(&args.nodes.get(start_idx).unwrap().debug_info),
+                                ProvenanceExtra::Wildcard => None,
+                            },
+                        }
+                        .build())
                     } else {
                         Ok(())
                     }
-                },
-                |args: ErrHandlerArgs<'_, TransitionError>| -> InterpErrorKind<'tcx> {
-                    let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
-                    TbError {
-                        conflicting_info,
-                        access_cause: diagnostics::AccessCause::Dealloc,
-                        alloc_id,
-                        error_offset: loc_range.start,
-                        error_kind,
-                        accessed_info: match prov {
-                            ProvenanceExtra::Concrete(_) => Some(accessed_info),
-                            // `accessed_info` contains the info of `start_tag`.
-                            // On a wildcard access this is not the info of the accessed tag
-                            // (as we don't know the accessed tag).
-                            ProvenanceExtra::Wildcard => None,
-                        },
-                    }
-                    .build()
                 },
             )?;
         }
@@ -888,6 +849,7 @@ impl<'tcx> Tree {
         let ProvenanceExtra::Concrete(tag) = prov else {
             return self.perform_wildcard_access(access_range_and_kind, global, alloc_id, span);
         };
+        let source_idx = self.tag_mapping.get(&tag).unwrap();
         use std::ops::Range;
         // Performs the per-node work:
         // - insert the permission if it does not exist
@@ -910,55 +872,47 @@ impl<'tcx> Tree {
                         access_kind: AccessKind,
                         access_cause: diagnostics::AccessCause,
                         args: NodeAppArgs<'_>|
-         -> Result<(), TransitionError> {
+         -> Result<(), _> {
             let node = args.nodes.get_mut(args.idx).unwrap();
             let mut perm = args.loc.perms.entry(args.idx);
 
             let state = perm.or_insert(node.default_location_state());
 
             let protected = global.borrow().protected_tags.contains_key(&node.tag);
-            state.perform_transition(
-                args.idx,
-                args.nodes,
-                &mut args.loc.wildcard_accesses,
-                access_kind,
-                access_cause,
-                /* access_range */ access_range_and_kind.map(|x| x.0),
-                args.rel_pos,
-                span,
-                perms_range,
-                protected,
-            )
+            state
+                .perform_transition(
+                    args.idx,
+                    args.nodes,
+                    &mut args.loc.wildcard_accesses,
+                    access_kind,
+                    access_cause,
+                    /* access_range */ access_range_and_kind.map(|x| x.0),
+                    args.rel_pos,
+                    span,
+                    perms_range.clone(),
+                    protected,
+                )
+                .map_err(|error_kind| {
+                    TbError {
+                        conflicting_info: &args.nodes.get(args.idx).unwrap().debug_info,
+                        access_cause,
+                        alloc_id,
+                        error_offset: perms_range.start,
+                        error_kind,
+                        accessed_info: Some(&args.nodes.get(source_idx).unwrap().debug_info),
+                    }
+                    .build()
+                })
         };
 
-        // Error handler in case `node_app` goes wrong.
-        // Wraps the faulty transition in more context for diagnostics.
-        let err_handler = |perms_range: Range<u64>,
-                           access_cause: diagnostics::AccessCause,
-                           args: ErrHandlerArgs<'_, TransitionError>|
-         -> InterpErrorKind<'tcx> {
-            let ErrHandlerArgs { error_kind, conflicting_info, accessed_info } = args;
-            TbError {
-                conflicting_info,
-                access_cause,
-                alloc_id,
-                error_offset: perms_range.start,
-                error_kind,
-                accessed_info: Some(accessed_info),
-            }
-            .build()
-        };
-
-        let idx = self.tag_mapping.get(&tag).unwrap();
         if let Some((access_range, access_kind, access_cause)) = access_range_and_kind {
             // Default branch: this is a "normal" access through a known range.
             // We iterate over affected locations and traverse the tree for each of them.
             for (loc_range, loc) in self.locations.iter_mut(access_range.start, access_range.size) {
                 TreeVisitor { nodes: &mut self.nodes, loc }.traverse_this_parents_children_other(
-                    idx,
+                    source_idx,
                     |args| node_skipper(access_kind, args),
                     |args| node_app(loc_range.clone(), access_kind, access_cause, args),
-                    |args| err_handler(loc_range.clone(), access_cause, args),
                 )?;
             }
         } else {
@@ -973,16 +927,15 @@ impl<'tcx> Tree {
             // why this is important.
             for (loc_range, loc) in self.locations.iter_mut_all() {
                 // Only visit accessed permissions
-                if let Some(p) = loc.perms.get(idx)
+                if let Some(p) = loc.perms.get(source_idx)
                     && let Some(access_kind) = p.permission.protector_end_access()
                     && p.accessed
                 {
                     let access_cause = diagnostics::AccessCause::FnExit(access_kind);
                     TreeVisitor { nodes: &mut self.nodes, loc }.traverse_nonchildren(
-                        idx,
+                        source_idx,
                         |args| node_skipper(access_kind, args),
                         |args| node_app(loc_range.clone(), access_kind, access_cause, args),
-                        |args| err_handler(loc_range.clone(), access_cause, args),
                     )?;
                 }
             }
@@ -1241,7 +1194,6 @@ impl<'tcx> Tree {
                             .build()
                         })
                     },
-                    |err| err.error_kind,
                 )?;
             }
         } else {
