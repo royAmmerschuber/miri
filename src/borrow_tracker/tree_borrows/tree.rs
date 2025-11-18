@@ -1322,18 +1322,13 @@ impl<'tcx> LocationTree {
                 |args: &NodeAppArgs<'_>| -> ContinueTraversal {
                     let node = args.nodes.get(args.idx).unwrap();
                     let perm = args.loc.perms.get(args.idx);
-                    let wildcard_state = args
-                        .loc
-                        .wildcard_accesses
-                        .get(args.idx)
-                        .cloned()
-                        .unwrap_or_default();
+                    let wildcard_state =
+                        args.loc.wildcard_accesses.get(args.idx).cloned().unwrap_or_default();
 
                     let only_foreign = max_local_tag
                         .map(|max_local_tag| max_local_tag < node.tag)
                         .unwrap_or(false);
-                    let old_state =
-                        perm.copied().unwrap_or_else(|| node.default_location_state());
+                    let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
                     // If we know where, relative to this node, the wildcard access occurs,
                     // then check if we can skip the entire subtree.
                     if let Some(relatedness) =
