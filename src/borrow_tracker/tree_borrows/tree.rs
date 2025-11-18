@@ -883,8 +883,7 @@ impl<'tcx> Tree {
             ProvenanceExtra::Concrete(tag) => Some(self.tag_mapping.get(&tag).unwrap()),
             ProvenanceExtra::Wildcard => None,
         };
-        let roots=Some(self.root).into_iter()
-                                 .chain(self.wildcard_roots.iter().copied());
+        let roots = Some(self.root).into_iter().chain(self.wildcard_roots.iter().copied());
         if let Some((access_range, access_kind, access_cause)) = access_range_and_kind {
             // Default branch: this is a "normal" access through a known range.
             // We iterate over affected locations and traverse the tree for each of them.
@@ -950,8 +949,8 @@ impl Tree {
     pub fn remove_unreachable_tags(&mut self, live_tags: &FxHashSet<BorTag>) {
         self.remove_useless_children(self.root, live_tags);
 
-        let wildcard_roots=self.wildcard_roots.clone();
-        for root in wildcard_roots.iter(){
+        let wildcard_roots = self.wildcard_roots.clone();
+        for root in wildcard_roots.iter() {
             self.remove_useless_children(*root, live_tags);
         }
         // Right after the GC runs is a good moment to check if we can
@@ -1246,6 +1245,7 @@ impl<'tcx> LocationTree {
         };
         let node_app = |args: NodeAppArgs<'_>| {
             let node = args.nodes.get_mut(args.idx).unwrap();
+            // When we reach the root we store it so we can return it from the function.
             if node.parent.is_none() {
                 root.set(args.idx).unwrap();
             }
@@ -1322,13 +1322,18 @@ impl<'tcx> LocationTree {
                 |args: &NodeAppArgs<'_>| -> ContinueTraversal {
                     let node = args.nodes.get(args.idx).unwrap();
                     let perm = args.loc.perms.get(args.idx);
-                    let wildcard_state =
-                        args.loc.wildcard_accesses.get(args.idx).cloned().unwrap_or_default();
+                    let wildcard_state = args
+                        .loc
+                        .wildcard_accesses
+                        .get(args.idx)
+                        .cloned()
+                        .unwrap_or_default();
 
-                    let old_state = perm.copied().unwrap_or_else(|| node.default_location_state());
                     let only_foreign = max_local_tag
                         .map(|max_local_tag| max_local_tag < node.tag)
                         .unwrap_or(false);
+                    let old_state =
+                        perm.copied().unwrap_or_else(|| node.default_location_state());
                     // If we know where, relative to this node, the wildcard access occurs,
                     // then check if we can skip the entire subtree.
                     if let Some(relatedness) =
@@ -1364,9 +1369,6 @@ impl<'tcx> LocationTree {
                     else {
                         // There doesn't exist a valid exposed reference for this access to
                         // happen through.
-                        // If this fails for one id, then it fails for all ids so this.
-                        // Since we always check the root first, this means it should always
-                        // fail on the root.
                         return Err(no_valid_exposed_references_error(
                             alloc_id,
                             loc_range.start,

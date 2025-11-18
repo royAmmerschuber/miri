@@ -458,7 +458,7 @@ impl Tree {
     /// has the correct `exposed_as` values.
     pub fn verify_wildcard_consistency(&self, global: &GlobalState) {
         // We rely on the fact that wildcard_roots is ordered according to tag from low to high.
-        assert!(self.wildcard_roots.is_sorted_by_key(|idx|self.nodes.get(*idx).unwrap().tag));
+        assert!(self.wildcard_roots.is_sorted_by_key(|idx| self.nodes.get(*idx).unwrap().tag));
 
         let protected_tags = &global.borrow().protected_tags;
         for (_, loc) in self.locations.iter_all() {
@@ -472,7 +472,8 @@ impl Tree {
                 let state = wildcard_accesses.get(id).unwrap();
 
                 let expected_exposed_as = if node.is_exposed {
-                    let perm = perms.get(id).copied().unwrap_or_else(||node.default_location_state());
+                    let perm =
+                        perms.get(id).copied().unwrap_or_else(|| node.default_location_state());
 
                     perm.permission()
                         .strongest_allowed_child_access(protected_tags.contains_key(&node.tag))

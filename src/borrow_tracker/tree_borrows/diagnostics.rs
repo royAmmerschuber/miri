@@ -826,7 +826,7 @@ impl DisplayRepr {
                     indent,
                     protected_tags,
                     /* is_last_child */ i + 1 == nb_children,
-                    /* is_wildcard_root */false,
+                    /* is_wildcard_root */ false,
                     acc,
                 );
                 indent.decrement(fmt);
