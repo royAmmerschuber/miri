@@ -26,7 +26,7 @@ use super::foreign_access_skipping::IdempotentForeignAccess;
 use super::perms::{PermTransition, Permission};
 use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs, TreeVisitor};
 use super::unimap::{UniIndex, UniKeyMap, UniValMap};
-use super::wildcard::WildcardState;
+use super::wildcard::{WildcardAccessRelatedness, WildcardState};
 use crate::borrow_tracker::{AccessKind, GlobalState, ProtectorKind};
 use crate::*;
 
@@ -91,7 +91,7 @@ impl LocationState {
         nodes: &mut UniValMap<Node>,
         wildcard_accesses: &mut UniValMap<WildcardState>,
         access_kind: AccessKind,
-        relatedness: AccessRelatedness,
+        relatedness: WildcardAccessRelatedness,
         protected: bool,
         diagnostics: &DiagnosticInfo,
     ) -> Result<(), TransitionError> {
@@ -104,9 +104,7 @@ impl LocationState {
         if !transition.is_noop() {
             let node = nodes.get_mut(idx).unwrap();
             // Record the event as part of the history.
-            node.debug_info
-                .history
-                .push(diagnostics.create_event(transition, relatedness.is_foreign()));
+            node.debug_info.history.push(diagnostics.create_event(transition, relatedness));
 
             // We need to update the wildcard state, if the permission
             // of an exposed pointer changes.
@@ -125,13 +123,14 @@ impl LocationState {
     fn perform_access(
         &mut self,
         access_kind: AccessKind,
-        rel_pos: AccessRelatedness,
+        rel_pos: WildcardAccessRelatedness,
         protected: bool,
     ) -> Result<PermTransition, TransitionError> {
         let old_perm = self.permission;
-        let transition = Permission::perform_access(access_kind, rel_pos, old_perm, protected)
-            .ok_or(TransitionError::ChildAccessForbidden(old_perm))?;
-        self.accessed |= !rel_pos.is_foreign();
+        let transition =
+            Permission::perform_wildcard_access(access_kind, rel_pos, old_perm, protected)
+                .ok_or(TransitionError::ChildAccessForbidden(old_perm))?;
+        self.accessed |= rel_pos == WildcardAccessRelatedness::LocalAccess;
         self.permission = transition.applied(old_perm).unwrap();
         // Why do only accessed locations cause protector errors?
         // Consider two mutable references `x`, `y` into disjoint parts of
@@ -229,7 +228,7 @@ impl LocationState {
     /// shoud be called on foreign accesses for increased performance. It should not be called
     /// when `skip_if_known_noop` indicated skipping, since it then is a no-op.
     /// See `foreign_access_skipping.rs`
-    fn record_new_access(&mut self, access_kind: AccessKind, rel_pos: AccessRelatedness) {
+    fn record_new_access(&mut self, access_kind: AccessKind, rel_pos: WildcardAccessRelatedness) {
         debug_assert!(matches!(
             self.skip_if_known_noop(access_kind, rel_pos),
             ContinueTraversal::Recurse
@@ -1124,7 +1123,7 @@ impl<'tcx> LocationTree {
 
                 let protected = global.borrow().protected_tags.contains_key(&node.tag);
 
-                let Some(wildcard_relatedness) = get_relatedness(args.idx, node, args.data) else {
+                let Some(relatedness) = get_relatedness(args.idx, node, args.data) else {
                     // There doesn't exist a valid exposed reference for this access to
                     // happen through.
                     // This can only happen if `root` is the main root: We set
@@ -1143,14 +1142,6 @@ impl<'tcx> LocationTree {
                 {
                     has_valid_exposed = true;
                 }
-
-                let Some(relatedness) = wildcard_relatedness.to_relatedness() else {
-                    // If the access type is Either, then we do not apply any transition
-                    // to this node, but we still update each of its children.
-                    // This is an imprecision! In the future, maybe we can still do some sort
-                    // of best-effort update here.
-                    return Ok(());
-                };
 
                 // We know the exact relatedness, so we can actually do precise checks.
                 perm.perform_transition(

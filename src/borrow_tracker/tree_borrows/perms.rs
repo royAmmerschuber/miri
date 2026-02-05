@@ -53,7 +53,7 @@ enum PermissionPriv {
 }
 use self::PermissionPriv::*;
 use super::foreign_access_skipping::IdempotentForeignAccess;
-use super::wildcard::WildcardAccessLevel;
+use super::wildcard::{WildcardAccessLevel, WildcardAccessRelatedness};
 
 impl PartialOrd for PermissionPriv {
     /// PermissionPriv is ordered by the reflexive transitive closure of
@@ -325,6 +325,44 @@ impl Permission {
         let old_state = old_perm.inner;
         transition::perform_access(kind, rel_pos, old_state, protected)
             .map(|new_state| PermTransition { from: old_state, to: new_state })
+    }
+
+    /// Apply the transition to the inner PermissionPriv.
+    pub fn perform_wildcard_access(
+        kind: AccessKind,
+        rel_pos: WildcardAccessRelatedness,
+        old_perm: Self,
+        protected: bool,
+    ) -> Option<PermTransition> {
+        if let Some(rel_pos) = rel_pos.to_relatedness() {
+            Self::perform_access(kind, rel_pos, old_perm, protected)
+        } else {
+            // If we do not know the relatedness between the references then we try both transitions and
+            // pick the one with more permissions.
+            let foreign_state =
+                Self::perform_access(kind, AccessRelatedness::ForeignAccess, old_perm, protected)
+                    .map(|v| v.to);
+            let local_state =
+                Self::perform_access(kind, AccessRelatedness::LocalAccess, old_perm, protected)
+                    .map(|v| v.to);
+            if let (Some(a), Some(b)) = (foreign_state, local_state) {
+                // The partial ordering is defined such that the lower values have the most permissions.
+                // So we pick the lower of the two values.
+                let either_state = match a.partial_cmp(&b) {
+                    // Fall back to noop transition if they are not comparable.
+                    None => old_perm.inner,
+                    Some(Ordering::Greater) => b,
+                    Some(Ordering::Less) => a,
+                    Some(Ordering::Equal) => {
+                        // Both are equal so it doesnt matter which we pick.
+                        a
+                    }
+                };
+                Some(PermTransition { from: old_perm.inner, to: either_state })
+            } else {
+                None
+            }
+        }
     }
 
     /// During a provenance GC, we want to compact the tree.
